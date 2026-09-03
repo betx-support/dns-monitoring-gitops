@@ -1,0 +1,37 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: pihole-branch-alerts
+  namespace: dns-monitoring
+  labels:
+    # Must match the ruleSelector the kube-prometheus-stack Prometheus
+    # instance uses — check `kubectl get prometheus -n dns-monitoring -o yaml`
+    # if this rule doesn't appear under Status > Rules in the Prometheus UI.
+    release: hq-stats
+spec:
+  groups:
+    - name: pihole-branches
+      rules:
+        - alert: BranchExporterDown
+          expr: up{job="pihole"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pi-hole exporter unreachable at {{ $labels.site }}"
+
+        - alert: BranchQueryVolumeDropped
+          expr: sum(rate(pihole_dns_queries_today[15m])) by (site) < 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DNS query volume near zero at {{ $labels.site }}"
+
+        - alert: BranchBlockRateSpike
+          expr: (sum(pihole_ads_blocked_today) by (site) / sum(pihole_dns_queries_today) by (site)) > 0.6
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Abnormally high blocked-query ratio at {{ $labels.site }}"

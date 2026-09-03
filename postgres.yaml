@@ -1,0 +1,82 @@
+# Shared Postgres backend for the Grafana pair. Password comes from the
+# grafana-db-credentials Secret, which ESO populates from Vault
+# (see 01-external-secrets.yaml) — nothing plaintext here.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-postgres-data
+  namespace: dns-monitoring
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-postgres
+  namespace: dns-monitoring
+spec:
+  replicas: 1   # accepted single point at this scale — see the HA guide
+  selector:
+    matchLabels: { app: grafana-postgres }
+  template:
+    metadata:
+      labels: { app: grafana-postgres }
+    spec:
+      # PLACEHOLDER: matches the node taint/label set in values.yaml.
+      # Remove both if this stack isn't getting dedicated nodes.
+      tolerations:
+        - key: "workload"
+          operator: "Equal"
+          value: "monitoring"
+          effect: "NoSchedule"
+      nodeSelector:
+        workload: monitoring
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          env:
+            - name: POSTGRES_DB
+              value: grafana
+            - name: POSTGRES_USER
+              value: grafana
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-db-credentials
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "grafana"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-postgres
+  namespace: dns-monitoring
+spec:
+  selector: { app: grafana-postgres }
+  ports:
+    - port: 5432
+      targetPort: 5432

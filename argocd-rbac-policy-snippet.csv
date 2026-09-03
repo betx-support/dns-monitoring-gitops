@@ -1,0 +1,10 @@
+# Append these two lines to the existing argocd-rbac-cm ConfigMap's
+# policy.csv key — do not replace the whole file, just add to it.
+# Mirrors rbac-policy.csv's exact pattern for snipeit-project, reusing the
+# same real group (betx-platform-team) rather than inventing a new one,
+# since presumably the same platform team operates this too. If a
+# different team should own DNS monitoring, swap the group name on the
+# "g," line only — the role/project lines stay the same either way.
+p, role:dns-monitoring-operator, applications, sync, dns-monitoring-project/*, allow
+p, role:dns-monitoring-operator, applications, get, dns-monitoring-project/*, allow
+g, betx-platform-team, role:dns-monitoring-operator

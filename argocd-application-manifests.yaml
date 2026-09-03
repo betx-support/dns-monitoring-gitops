@@ -1,0 +1,29 @@
+# Deploys everything in this directory EXCEPT values.yaml (which the Helm
+# Application handles) and the argocd-application-*.yaml files themselves.
+# PLACEHOLDER: same repoURL/path caveat as argocd-application-helm.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dns-monitoring-manifests
+  namespace: argocd
+spec:
+  project: dns-monitoring-project
+  source:
+    repoURL: https://github.com/betx-support/dns-monitoring-gitops.git
+    targetRevision: main
+    path: manifests   # suggest putting 00-namespace.yaml, 01-external-secrets.yaml,
+                       # 02-networkpolicy.yaml, 03-rbac.yaml, postgres.yaml,
+                       # prometheusrule.yaml in a "manifests/" subfolder in your repo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dns-monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # Namespace/quota should sync before secrets/workloads reference it.
+    # ArgoCD generally handles ordering via sync waves if you need it —
+    # add annotation argocd.argoproj.io/sync-wave: "0" to 00-namespace.yaml
+    # and "1" to everything else if you see ordering issues in practice.

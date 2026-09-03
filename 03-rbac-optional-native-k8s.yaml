@@ -1,0 +1,40 @@
+# OPTIONAL — supplementary hardening only, not your primary access-control
+# layer. Your rbac-policy.csv shows this cluster actually controls app-level
+# access via ArgoCD's own RBAC (see argocd-rbac-policy-snippet.csv), not
+# native Kubernetes RoleBindings — there's no evidence snipeit uses anything
+# like this file. Apply it only if you also want to restrict raw `kubectl`
+# access to this namespace for people who bypass ArgoCD entirely; otherwise
+# skip this file and rely on argocd-rbac-policy-snippet.csv instead.
+#
+# If you do use it, replace "dns-monitoring-admins" / "dns-monitoring-viewers"
+# with real IdP group names — none are established elsewhere in this cluster
+# for native K8s RBAC, so these are still genuine placeholders, not
+# confirmed values like the ArgoCD-side group (betx-platform-team) is.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dns-monitoring-admin-binding
+  namespace: dns-monitoring
+subjects:
+  - kind: Group
+    name: dns-monitoring-admins
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: admin   # built-in ClusterRole, scoped to this namespace via RoleBinding
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dns-monitoring-viewer-binding
+  namespace: dns-monitoring
+subjects:
+  - kind: Group
+    name: dns-monitoring-viewers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: view   # built-in ClusterRole, read-only, scoped to this namespace via RoleBinding
+  apiGroup: rbac.authorization.k8s.io

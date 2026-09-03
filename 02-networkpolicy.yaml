@@ -1,0 +1,107 @@
+# Default-deny ingress, then explicitly allow only what's needed. This means
+# SnipeIT's pods (or anything else in another namespace) cannot reach into
+# this namespace unless a rule below permits it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: dns-monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Allow pods within dns-monitoring to talk to each other freely
+# (Grafana -> Prometheus, Grafana -> Postgres, Prometheus -> Alertmanager).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: dns-monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+---
+# Allow the existing ingress-nginx controller to reach Grafana.
+# PLACEHOLDER: adjust the namespace/label selector below if your nginx
+# ingress controller lives somewhere other than "ingress-nginx" or uses
+# different pod labels — check with:
+#   kubectl get pods -n ingress-nginx --show-labels
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-nginx
+  namespace: dns-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Egress: allow DNS resolution (needed by every pod) and allow reaching the
+# 25 branch exporters over your site-to-site VPN.
+# PLACEHOLDER: replace 10.90.0.0/16 with your actual VPN/branch CIDR range.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns-and-branches
+  namespace: dns-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 10.90.0.0/16
+      ports:
+        - protocol: TCP
+          port: 9617
+---
+# Allow Alertmanager to reach out to Slack (or your notification target)
+# over HTTPS. Restrict further if you know Slack's egress IP ranges and
+# want to be stricter than "any HTTPS destination".
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-alertmanager-notifications
+  namespace: dns-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443

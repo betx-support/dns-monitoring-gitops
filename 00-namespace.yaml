@@ -1,0 +1,53 @@
+# Deliberately a distinct namespace from any existing cluster-level
+# monitoring you may already run, and separate from wherever SnipeIT lives.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dns-monitoring
+  labels:
+    app.kubernetes.io/part-of: dns-monitoring-stack
+---
+# Caps total resource consumption for this namespace so it cannot starve
+# SnipeIT (or anything else) on the same cluster if something misbehaves
+# (e.g. a runaway Prometheus query, a Grafana memory leak).
+#
+# Sums below are based on the 2x Prometheus + 2x Alertmanager + 2x Grafana +
+# 1x Postgres topology from values.yaml/postgres.yaml, with headroom.
+# Adjust upward if you add more branches/dashboards and see it get tight —
+# check actual usage with:
+#   kubectl top pods -n dns-monitoring
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dns-monitoring-quota
+  namespace: dns-monitoring
+spec:
+  hard:
+    requests.cpu: "1500m"
+    requests.memory: "2Gi"
+    limits.cpu: "3000m"
+    limits.memory: "4Gi"
+    requests.storage: "60Gi"
+    persistentvolumeclaims: "6"
+    pods: "15"
+---
+# Fallback requests/limits for any container in this namespace that doesn't
+# specify its own — mainly a safety net, since values.yaml/postgres.yaml set
+# explicit resources already.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dns-monitoring-limits
+  namespace: dns-monitoring
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      max:
+        cpu: "1000m"
+        memory: "2Gi"

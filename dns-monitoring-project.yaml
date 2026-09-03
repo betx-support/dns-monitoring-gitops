@@ -1,0 +1,37 @@
+# Mirrors project.yaml's per-app AppProject pattern (sourceRepos/destinations
+# scoped to exactly this app), with one deliberate difference from
+# snipeit-project: clusterResourceWhitelist is NOT empty here.
+#
+# Why: kube-prometheus-stack installs genuinely cluster-scoped resources —
+# its CRDs (Prometheus, Alertmanager, ServiceMonitor, PrometheusRule, etc.),
+# ClusterRole/ClusterRoleBinding for the Operator's broad watch permissions,
+# and admission webhooks for validating those CRDs. SnipeIT's project can
+# stay locked down to zero cluster-scoped resources because it genuinely
+# doesn't need any; copying that here verbatim would make the Helm
+# Application's sync fail outright the first time ArgoCD tries to apply a
+# CRD or ClusterRole.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: dns-monitoring-project
+  namespace: argocd
+spec:
+  sourceRepos:
+    - https://github.com/betx-support/dns-monitoring-gitops.git
+  destinations:
+    - namespace: dns-monitoring
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: "apiextensions.k8s.io"
+      kind: "CustomResourceDefinition"
+    - group: "rbac.authorization.k8s.io"
+      kind: "ClusterRole"
+    - group: "rbac.authorization.k8s.io"
+      kind: "ClusterRoleBinding"
+    - group: "admissionregistration.k8s.io"
+      kind: "MutatingWebhookConfiguration"
+    - group: "admissionregistration.k8s.io"
+      kind: "ValidatingWebhookConfiguration"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
