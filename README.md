@@ -52,6 +52,29 @@ assumptions in the first draft of this stack:
 | Dedicated node pool taint/label (`workload=monitoring`) | **Your choice** — only relevant if you add nodes specifically for this |
 | 25 branch exporter IPs in `values.yaml` | **Still placeholders** — your real branch IPs |
 
+## CRDs must be installed manually, once, before the first sync
+
+`kube-prometheus-stack`'s CRDs (`Prometheus`, `Alertmanager`, etc.) have
+OpenAPI schemas large enough that ArgoCD's default client-side apply
+fails outright — the `kubectl.kubernetes.io/last-applied-configuration`
+annotation it tries to store exceeds Kubernetes' 262144-byte annotation
+limit. `argocd-application-helm.yaml` sets `helm.skipCrds: true`
+specifically so ArgoCD never attempts this — instead, install them
+yourself once with server-side apply, which doesn't hit the same limit:
+
+```bash
+helm pull prometheus-community/kube-prometheus-stack --version 62.7.0 --untar
+find kube-prometheus-stack -path "*crds*" -name "*.yaml"   # confirm the real path for this version
+kubectl apply --server-side -f kube-prometheus-stack/charts/crds/crds/
+kubectl get crds | grep monitoring.coreos.com   # confirm they landed
+```
+
+**Do this again, by hand, any time you bump `targetRevision` to a new
+chart version** — `skipCrds: true` means ArgoCD will never update them
+for you, so a chart upgrade that changes the CRD schema needs this same
+manual step re-run first, or the Operator may reject objects using fields
+the installed CRD version doesn't recognize yet.
+
 ## Deployment order
 
 1. **Vault side first** (run these by hand, same as your existing Vault

@@ -24,10 +24,10 @@ metadata:
   namespace: dns-monitoring
 spec:
   hard:
-    requests.cpu: "500m"
-    requests.memory: "1Gi"
-    limits.cpu: "1500m"
-    limits.memory: "2Gi"
+    requests.cpu: "800m"
+    requests.memory: "1.5Gi"
+    limits.cpu: "2000m"
+    limits.memory: "3Gi"
     requests.storage: "40Gi"
     persistentvolumeclaims: "4"
     pods: "6"
