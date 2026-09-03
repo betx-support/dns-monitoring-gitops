@@ -26,6 +26,22 @@ spec:
   destinations:
     - namespace: dns-monitoring
       server: https://kubernetes.default.svc
+    # kube-prometheus-stack has several components (kubelet monitoring,
+    # optionally kube-state-metrics targets, etc.) that place Service/
+    # Endpoints objects directly in kube-system rather than dns-monitoring.
+    # Chasing each one individually via values.yaml overrides kept
+    # surfacing new ones, so allowing this destination directly instead.
+    # Bigger blast radius than the rest of this project (kube-system holds
+    # cluster-critical components) — if that's a concern, revisit by
+    # auditing `helm template` output for every kube-system-namespaced
+    # resource and redirecting/disabling them one by one instead.
+    - namespace: kube-system
+      server: https://kubernetes.default.svc
+  # POC MODE: MutatingWebhookConfiguration/ValidatingWebhookConfiguration
+  # removed from the whitelist since prometheusOperator.admissionWebhooks
+  # is disabled in values.yaml for now — the chart won't try to create
+  # them. Add both back if you re-enable admission webhooks later, or the
+  # Application's sync will fail on an object this project doesn't permit.
   clusterResourceWhitelist:
     - group: "apiextensions.k8s.io"
       kind: "CustomResourceDefinition"
@@ -33,10 +49,6 @@ spec:
       kind: "ClusterRole"
     - group: "rbac.authorization.k8s.io"
       kind: "ClusterRoleBinding"
-    - group: "admissionregistration.k8s.io"
-      kind: "MutatingWebhookConfiguration"
-    - group: "admissionregistration.k8s.io"
-      kind: "ValidatingWebhookConfiguration"
   namespaceResourceWhitelist:
     - group: "*"
       kind: "*"

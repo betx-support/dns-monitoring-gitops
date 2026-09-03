@@ -11,11 +11,11 @@ metadata:
 # SnipeIT (or anything else) on the same cluster if something misbehaves
 # (e.g. a runaway Prometheus query, a Grafana memory leak).
 #
-# Sums below are based on the 2x Prometheus + 2x Alertmanager + 2x Grafana +
-# 1x Postgres topology from values.yaml/postgres.yaml, with headroom.
-# Adjust upward if you add more branches/dashboards and see it get tight —
-# check actual usage with:
-#   kubectl top pods -n dns-monitoring
+# POC MODE: sums shrunk to match the single-pod, no-Postgres topology
+# (1x Prometheus + 1x Alertmanager + 1x Grafana, each with its own PVC).
+# When you scale back to HA, double these roughly in line with the
+# replica counts you restore in values.yaml. Adjust either direction if
+# `kubectl top pods -n dns-monitoring` shows it's tight or generous.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -23,13 +23,13 @@ metadata:
   namespace: dns-monitoring
 spec:
   hard:
-    requests.cpu: "1500m"
-    requests.memory: "2Gi"
-    limits.cpu: "3000m"
-    limits.memory: "4Gi"
-    requests.storage: "60Gi"
-    persistentvolumeclaims: "6"
-    pods: "15"
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "1500m"
+    limits.memory: "2Gi"
+    requests.storage: "40Gi"
+    persistentvolumeclaims: "4"
+    pods: "6"
 ---
 # Fallback requests/limits for any container in this namespace that doesn't
 # specify its own — mainly a safety net, since values.yaml/postgres.yaml set

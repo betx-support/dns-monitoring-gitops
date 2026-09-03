@@ -15,8 +15,10 @@ kubectl exec -n vault vault-0 -- vault login "$ROOT_TOKEN"
 
 kubectl exec -n vault vault-0 -- vault secrets enable -path=dns-monitoring kv-v2
 
-kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/postgres \
-  POSTGRES_PASSWORD="<generated>"
+# POC MODE: no "dns-monitoring/postgres" secret anymore — Postgres was
+# removed since Grafana is back to a single pod persisting via its own
+# PVC (see values.yaml). If you re-enable the HA Postgres pattern later,
+# re-add: vault kv put dns-monitoring/postgres POSTGRES_PASSWORD="<generated>"
 
 kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/grafana-admin \
   GRAFANA_ADMIN_USER="admin" \

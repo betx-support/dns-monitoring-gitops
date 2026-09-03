@@ -8,7 +8,6 @@
 set -euo pipefail
 
 kubectl exec -i -n vault vault-0 -- vault policy write dns-monitoring-eso - <<'EOF'
-path "dns-monitoring/data/postgres"      { capabilities = ["read"] }
 path "dns-monitoring/data/grafana-admin" { capabilities = ["read"] }
 path "dns-monitoring/data/alertmanager"  { capabilities = ["read"] }
 EOF

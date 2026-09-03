@@ -5,6 +5,34 @@ Vault + External Secrets Operator + ArgoCD + cert-manager platform SnipeIT
 already uses, following the **exact same conventions** confirmed from your
 `snipeit-gitops` scripts and manifests — not guessed equivalents.
 
+## POC mode — what changed from the HA version
+
+Scaled down for the POC phase to cut object count, while keeping every
+piece of actual data durable:
+
+- Prometheus, Alertmanager, and Grafana: `replicas: 2` → `1`. Their
+  `podAntiAffinity` blocks were removed too (meaningless with one replica).
+- `kubeStateMetrics`, `nodeExporter` (a DaemonSet — one pod **per node**,
+  usually the single biggest object-count contributor), and
+  `prometheusOperator.admissionWebhooks` all disabled — none of them are
+  needed to monitor 25 external Pi-holes, and each one adds pods/jobs/
+  webhook configs you don't need yet.
+- **Postgres removed entirely.** It only existed so two Grafana pods could
+  share dashboard/user state. With one Grafana pod, that problem doesn't
+  exist — Grafana's own PVC (`persistence.enabled: true`) gives you the
+  same durability across pod restarts with an entire Deployment + Service
+  + PVC + ExternalSecret gone from the object count.
+- `dns-monitoring-project.yaml`'s cluster-resource whitelist trimmed to
+  match — no webhook configs, no webhook-related objects to permit.
+- `00-namespace.yaml`'s ResourceQuota shrunk to match the smaller real
+  footprint.
+
+**Scaling back up later**, once this moves past POC: bump the three
+`replicas` back to 2, re-add `podAntiAffinity`, re-enable whichever of
+`kubeStateMetrics`/`nodeExporter`/`admissionWebhooks` you actually want,
+and reintroduce the Postgres pattern (an earlier version of this stack)
+if you want Grafana HA again. None of this is a one-way door.
+
 ## What's now confirmed (not placeholders) vs. still genuinely unknown
 
 Reviewing your actual Vault/ArgoCD/cert-manager setup corrected several
@@ -41,6 +69,7 @@ assumptions in the first draft of this stack:
    kubectl apply -f 01-external-secrets.yaml
    kubectl apply -f 02-networkpolicy.yaml   # after confirming the ingress-nginx namespace/labels
    kubectl get externalsecret -n dns-monitoring   # confirm SYNCED before moving on
+   # (no postgres.yaml step anymore — Grafana persists via its own PVC now)
    ```
 3. **ArgoCD project + RBAC**:
    ```bash
@@ -93,8 +122,7 @@ vault-secretstore.yaml              # SecretStore, mirrors snipeit's exactly
 03-rbac-optional-native-k8s.yaml    # Optional extra hardening, not the primary mechanism
 argocd-rbac-policy-snippet.csv      # Lines to append to argocd-rbac-cm
 dns-monitoring-project.yaml         # AppProject, correctly scoped for kube-prometheus-stack
-values.yaml                         # kube-prometheus-stack Helm values
-postgres.yaml                       # Grafana's Postgres backend
+values.yaml                         # kube-prometheus-stack Helm values (POC: single pods, own PVCs)
 prometheusrule.yaml                 # Branch-down / anomaly alert rules
 argocd-application-helm.yaml        # ArgoCD Application for the Helm chart
 argocd-application-manifests.yaml   # ArgoCD Application for everything else
