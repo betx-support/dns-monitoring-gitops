@@ -18,6 +18,11 @@ metadata:
 spec:
   sourceRepos:
     - https://github.com/betx-support/dns-monitoring-gitops.git
+    # Helm chart source for kube-prometheus-stack, added because the
+    # Application now uses ArgoCD's multi-source feature (one source pulls
+    # the chart from here, the other pulls values.yaml from the git repo
+    # above) — see argocd-application-helm.yaml.
+    - https://prometheus-community.github.io/helm-charts
   destinations:
     - namespace: dns-monitoring
       server: https://kubernetes.default.svc
