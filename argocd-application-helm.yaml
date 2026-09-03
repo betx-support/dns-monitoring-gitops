@@ -24,3 +24,10 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=false
+      # Required for kube-prometheus-stack specifically: its CRDs
+      # (Prometheus, Alertmanager, etc.) have OpenAPI schemas large enough
+      # that client-side apply's last-applied-configuration annotation
+      # exceeds Kubernetes' 262144-byte annotation limit, and the CRD
+      # creation fails outright. Server-side apply uses native field
+      # tracking instead of that annotation, avoiding the limit entirely.
+      - ServerSideApply=true

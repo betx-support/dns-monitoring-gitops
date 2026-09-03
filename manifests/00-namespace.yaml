@@ -1,12 +1,13 @@
-# Deliberately a distinct namespace from any existing cluster-level
-# monitoring you may already run, and separate from wherever SnipeIT lives.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: dns-monitoring
-  labels:
-    app.kubernetes.io/part-of: dns-monitoring-stack
----
+# Namespace itself is intentionally NOT defined here. It's created
+# automatically by argocd-application-manifests.yaml's
+# syncOptions: [CreateNamespace=true] instead — matching how
+# snipeit-project handles it. A literal `kind: Namespace` object in git
+# would be a cluster-scoped resource that ArgoCD tracks as "managed",
+# which then needs a clusterResourceWhitelist entry just like
+# MutatingWebhookConfiguration did. Letting CreateNamespace=true handle it
+# avoids that entirely — it's a one-time ArgoCD-side action, not a
+# tracked/diffed resource.
+#
 # Caps total resource consumption for this namespace so it cannot starve
 # SnipeIT (or anything else) on the same cluster if something misbehaves
 # (e.g. a runaway Prometheus query, a Grafana memory leak).
