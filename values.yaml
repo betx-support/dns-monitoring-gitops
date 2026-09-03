@@ -55,6 +55,15 @@ kubelet:
 prometheusOperator:
   admissionWebhooks:
     enabled: false
+  # Separate flag from admissionWebhooks.enabled above — this one gates
+  # whether the operator's own Deployment mounts a TLS secret
+  # (dns-monitoring-kube-promet-admission), used for the validating
+  # webhook and CRD conversion webhook. Disabling admissionWebhooks alone
+  # skips the cert-generation Job but NOT this mount, so the operator pod
+  # gets stuck in ContainerCreating forever waiting on a secret nothing
+  # ever creates. Both need to be off together for POC mode.
+  tls:
+    enabled: false
   # Same issue as Grafana's sidecars: with nothing set here, LimitRange's
   # 500m/512Mi default applies — more than the Operator itself needs.
   resources:
