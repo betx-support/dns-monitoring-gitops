@@ -1,33 +1,74 @@
 # values.yaml for prometheus-community/kube-prometheus-stack
-# Deploy via the ArgoCD Application in argocd-application-helm.yaml, or manually:
-#   helm install hq-stats prometheus-community/kube-prometheus-stack \
-#     -n dns-monitoring -f values.yaml
 #
-# PLACEHOLDER NODE SCHEDULING: this file assumes you'll add a dedicated node
-# pool for this workload, tainted so nothing else (including SnipeIT) lands
-# on it by accident, and labeled so this stack's pods target it specifically.
-# If you're NOT giving it dedicated nodes, delete every `tolerations:` and
-# `nodeSelector:` block below and pods will schedule normally alongside
-# everything else on the cluster.
+# POC MODE: scaled to single pods everywhere, and several optional
+# chart components disabled, specifically to cut down object count while
+# you're still validating the approach. Persistence is kept throughout —
+# nothing here trades durability for object count, only redundancy.
 #
-# To create the taint/label on your new node(s) once added to the cluster:
-#   kubectl taint nodes <node-name> workload=monitoring:NoSchedule
-#   kubectl label nodes <node-name> workload=monitoring
+# To scale back up to HA later: set replicas back to 2 on prometheus/
+# alertmanager/grafana, re-add the podAntiAffinity blocks (see the HA
+# guide's earlier version of this file), and reconsider re-enabling the
+# components disabled below.
+
+# CRDs are installed manually, once, via `kubectl apply --server-side`
+# (see README) — ArgoCD's helm.skipCrds Application setting wasn't being
+# honored for this chart's CRDs, likely because they ship as a separate
+# "crds" dependency subchart rather than through Helm's top-level crds/
+# folder convention that skipCrds targets. Disabling the subchart directly
+# here is the more reliable stop, confirmed via the `condition:` field in
+# kube-prometheus-stack's Chart.yaml.
+crds:
+  enabled: false
+
+# --- Cluster-monitoring components, disabled: this stack watches 25
+# external Pi-holes, not this Kubernetes cluster's own health, so these
+# are pure overhead on top of what you actually need. ---
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+# kube-state-metrics: one extra pod, exposes k8s object metrics you're not
+# using yet. Off for POC.
+kubeStateMetrics:
+  enabled: false
+
+# node-exporter: a DaemonSet — one pod PER NODE, not one total. This is
+# almost certainly the single biggest contributor to "too many objects"
+# if your cluster has more than a couple of nodes. Off for POC.
+nodeExporter:
+  enabled: false
+
+kubelet:
+  namespace: dns-monitoring
+
+# Admission webhooks add a ValidatingWebhookConfiguration, a
+# MutatingWebhookConfiguration, and one-shot Job objects that generate
+# their TLS certs — useful for catching malformed PrometheusRule/
+# ServiceMonitor objects before they're accepted, but it's extra moving
+# parts for a POC with one person authoring the rules by hand. Re-enable
+# before treating this as production.
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+  # Same issue as Grafana's sidecars: with nothing set here, LimitRange's
+  # 500m/512Mi default applies — more than the Operator itself needs.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
 
 prometheus:
   prometheusSpec:
-    replicas: 2
+    replicas: 1
     retention: 30d
-    podAntiAffinity: "hard"
-    podAntiAffinityTopologyKey: "kubernetes.io/hostname"
-
-    tolerations:
-      - key: "workload"
-        operator: "Equal"
-        value: "monitoring"
-        effect: "NoSchedule"
-    nodeSelector:
-      workload: monitoring
 
     resources:
       requests:
@@ -43,12 +84,14 @@ prometheus:
         static_configs:
           - targets: ["<branch-01-ip>:9617"]
             labels: { site: "branch-01" }
-          - targets: ["<branch-02-ip>:9617"]
-            labels: { site: "branch-02" }
-          - targets: ["<branch-03-ip>:9617"]
-            labels: { site: "branch-03" }
+#          - targets: ["<branch-02-ip>:9617"]
+#            labels: { site: "branch-02" }
+#          - targets: ["<branch-03-ip>:9617"]
+#            labels: { site: "branch-03" }
           # ... continue for all 25 branches
 
+    # Persistence kept — a POC still loses all history on every pod
+    # restart without this, which defeats the point of testing it.
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -59,22 +102,8 @@ prometheus:
 
 alertmanager:
   alertmanagerSpec:
-    replicas: 2
-    podAntiAffinity: "hard"
-    podAntiAffinityTopologyKey: "kubernetes.io/hostname"
+    replicas: 1
 
-    tolerations:
-      - key: "workload"
-        operator: "Equal"
-        value: "monitoring"
-        effect: "NoSchedule"
-    nodeSelector:
-      workload: monitoring
-
-    # Mounts the ESO-created secret at
-    # /etc/alertmanager/secrets/alertmanager-slack-webhook/SLACK_WEBHOOK_URL
-    # inside every Alertmanager pod, so the webhook is read from a file
-    # rather than embedded in this values.yaml.
     secrets:
       - alertmanager-slack-webhook
 
@@ -109,20 +138,32 @@ alertmanager:
             send_resolved: true
 
 grafana:
-  replicas: 2
-  podAntiAffinity: "hard"
-  podAntiAffinityTopologyKey: "kubernetes.io/hostname"
+  replicas: 1
 
-  tolerations:
-    - key: "workload"
-      operator: "Equal"
-      value: "monitoring"
-      effect: "NoSchedule"
-  nodeSelector:
-    workload: monitoring
-
+  # Switched from the external-Postgres HA pattern to Grafana's own PVC.
+  # The shared Postgres backend (postgres.yaml) existed ONLY to let 2
+  # Grafana pods share state safely — with a single pod there's no state
+  # to share, so a plain PVC gives you the same durability (dashboards,
+  # users, sessions survive a pod restart) with an entire Deployment +
+  # Service + PVC + ExternalSecret removed from the object count.
   persistence:
-    enabled: false   # state lives in Postgres, not the pod
+    enabled: true
+    size: 5Gi
+
+  # Without this, the two k8s-sidecar containers (dashboards + datasources
+  # auto-loading) have no explicit resources, so LimitRange's default
+  # (500m cpu limit each, since none was specified) applies to BOTH —
+  # pushing the pod's real total to 200m (grafana) + 500m + 500m = 1200m,
+  # not the ~200-400m this pod actually needs. This is what caused the
+  # ResourceQuota rejection.
+  sidecar:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
 
   resources:
     requests:
@@ -132,27 +173,14 @@ grafana:
       cpu: 200m
       memory: 256Mi
 
-  env:
-    GF_DATABASE_TYPE: postgres
-    GF_DATABASE_HOST: "grafana-postgres.dns-monitoring.svc.cluster.local:5432"
-    GF_DATABASE_NAME: grafana
-    GF_DATABASE_USER: grafana
-
-  # Populated by the ExternalSecret in 01-external-secrets.yaml
-  envFromSecret: grafana-db-credentials
-
   admin:
-    existingSecret: "grafana-admin-credentials"   # also from ExternalSecret
+    existingSecret: "grafana-admin-credentials"
     userKey: admin-user
     passwordKey: admin-password
 
   service:
     type: ClusterIP
 
-  # Matches the real internal-ca-issuer ClusterIssuer confirmed from
-  # 03-internal-ca-clusterissuer.yaml, and the backend-protocol annotation
-  # every other internal ingress (Vault UI, ArgoCD) in this cluster uses,
-  # since Grafana's own Service is plain HTTP — TLS terminates at nginx.
   ingress:
     enabled: true
     ingressClassName: nginx
