@@ -150,20 +150,30 @@ grafana:
     enabled: true
     size: 5Gi
 
-  # Without this, the two k8s-sidecar containers (dashboards + datasources
-  # auto-loading) have no explicit resources, so LimitRange's default
-  # (500m cpu limit each, since none was specified) applies to BOTH —
-  # pushing the pod's real total to 200m (grafana) + 500m + 500m = 1200m,
-  # not the ~200-400m this pod actually needs. This is what caused the
-  # ResourceQuota rejection.
+  # The chart does NOT apply a single shared sidecar.resources to every
+  # sidecar container — dashboards/datasources each need their own nested
+  # resources: block, or they silently fall through to LimitRange's default
+  # (500m cpu / 512Mi memory limit each). That's what actually caused the
+  # rejection: 200m (grafana) + 500m (dashboards, unset) + 500m
+  # (datasources, unset) = 1200m — matching the quota error's requested
+  # value exactly, despite a top-level sidecar.resources being set here.
   sidecar:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 64Mi
-      limits:
-        cpu: 100m
-        memory: 128Mi
+    dashboards:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+    datasources:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
 
   resources:
     requests:
