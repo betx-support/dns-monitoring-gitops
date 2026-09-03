@@ -80,9 +80,11 @@ spec:
         - protocol: TCP
           port: 9617
 ---
-# Allow Alertmanager to reach out to Slack (or your notification target)
-# over HTTPS. Restrict further if you know Slack's egress IP ranges and
-# want to be stricter than "any HTTPS destination".
+# Allow Alertmanager to reach smtp.office365.com on the SMTP submission
+# port (587, STARTTLS) rather than 443 — this is direct SMTP, not a
+# webhook. Restrict the destination CIDR further if you know Office 365's
+# published SMTP endpoint IP ranges and want to be stricter than
+# "any destination on 587".
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -104,4 +106,4 @@ spec:
           port: 53
     - ports:
         - protocol: TCP
-          port: 443
+          port: 587

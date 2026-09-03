@@ -105,7 +105,7 @@ alertmanager:
     replicas: 1
 
     secrets:
-      - alertmanager-slack-webhook
+      - alertmanager-smtp-credentials
 
     resources:
       requests:
@@ -124,6 +124,16 @@ alertmanager:
               storage: 2Gi
 
   config:
+    global:
+      # Office 365 direct SMTP. Requires SMTP AUTH enabled on this specific
+      # mailbox (disabled tenant-wide by default in Exchange Online) — see
+      # README. If the mailbox has MFA, smtp_auth_password must be an app
+      # password, not the normal login password.
+      smtp_smarthost: "smtp.office365.com:587"
+      smtp_from: "<alerts-mailbox@betxchange.co.za>"   # PLACEHOLDER: real sending mailbox
+      smtp_auth_username: "<alerts-mailbox@betxchange.co.za>"   # PLACEHOLDER: same mailbox
+      smtp_auth_password_file: "/etc/alertmanager/secrets/alertmanager-smtp-credentials/SMTP_PASSWORD"
+      smtp_require_tls: true
     route:
       receiver: "ops-team"
       group_by: ["site"]
@@ -132,9 +142,8 @@ alertmanager:
       repeat_interval: 4h
     receivers:
       - name: "ops-team"
-        slack_configs:
-          - slack_api_url_file: "/etc/alertmanager/secrets/alertmanager-slack-webhook/SLACK_WEBHOOK_URL"
-            channel: "#dns-alerts"
+        email_configs:
+          - to: "it@betxchange.co.za"   # PLACEHOLDER: real recipient(s), comma-separated for multiple
             send_resolved: true
 
 grafana:
@@ -150,30 +159,20 @@ grafana:
     enabled: true
     size: 5Gi
 
-  # The chart does NOT apply a single shared sidecar.resources to every
-  # sidecar container — dashboards/datasources each need their own nested
-  # resources: block, or they silently fall through to LimitRange's default
-  # (500m cpu / 512Mi memory limit each). That's what actually caused the
-  # rejection: 200m (grafana) + 500m (dashboards, unset) + 500m
-  # (datasources, unset) = 1200m — matching the quota error's requested
-  # value exactly, despite a top-level sidecar.resources being set here.
+  # Without this, the two k8s-sidecar containers (dashboards + datasources
+  # auto-loading) have no explicit resources, so LimitRange's default
+  # (500m cpu limit each, since none was specified) applies to BOTH —
+  # pushing the pod's real total to 200m (grafana) + 500m + 500m = 1200m,
+  # not the ~200-400m this pod actually needs. This is what caused the
+  # ResourceQuota rejection.
   sidecar:
-    dashboards:
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 100m
-          memory: 128Mi
-    datasources:
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 100m
-          memory: 128Mi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
 
   resources:
     requests:
