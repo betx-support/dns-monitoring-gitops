@@ -1,7 +1,3 @@
-# PLACEHOLDER: repoURL/path below assume you'll commit values.yaml into your
-# existing GitOps repo (e.g. alongside snipeit-gitops, or a new
-# dns-monitoring-gitops repo) at the path shown. Adjust to match your actual
-# repo layout and branch.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -9,18 +5,16 @@ metadata:
   namespace: argocd
 spec:
   project: dns-monitoring-project
-  source:
-    repoURL: https://github.com/betx-support/dns-monitoring-gitops.git
-    targetRevision: main
-    path: .
-    helm:
-      valueFiles:
-        - values.yaml
-    chart: kube-prometheus-stack
-    # ArgoCD needs the Helm repo added as a source too, if not using an
-    # umbrella chart — alternatively, add prometheus-community as a Helm
-    # repository in ArgoCD's own config first:
-    #   argocd repo add https://prometheus-community.github.io/helm-charts --type helm --name prometheus-community
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 62.7.0   # pin a real chart version — check `helm search repo prometheus-community/kube-prometheus-stack --versions`
+      helm:
+        valueFiles:
+          - $values/values.yaml
+    - repoURL: https://github.com/betx-support/dns-monitoring-gitops.git
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: dns-monitoring
@@ -29,4 +23,4 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      - CreateNamespace=false   # namespace is managed explicitly via 00-namespace.yaml instead
+      - CreateNamespace=false
