@@ -14,6 +14,14 @@
 #   kubectl taint nodes <node-name> workload=monitoring:NoSchedule
 #   kubectl label nodes <node-name> workload=monitoring
 
+# Disabled because these create Service/Endpoints objects in kube-system to
+# scrape control-plane components (kube-scheduler, kube-controller-manager,
+# kube-proxy, etcd) — dns-monitoring-project's AppProject only whitelists
+# the dns-monitoring namespace as a destination, so ArgoCD blocks anything
+# targeting kube-system. Most control-plane components also bind to
+# 127.0.0.1 by default anyway, so these targets are usually unreachable
+# even when permitted. Re-enable + add kube-system to the AppProject's
+# destinations if you specifically want control-plane dashboards.
 kubeControllerManager:
   enabled: false
 kubeScheduler:
@@ -22,6 +30,14 @@ kubeProxy:
   enabled: false
 kubeEtcd:
   enabled: false
+
+# kubelet monitoring is a separate toggle from the four above — it defaults
+# to creating a Service/Endpoints object directly in kube-system (unlike
+# the others, which just scrape existing kube-system targets). Redirected
+# here instead of disabled since kubelet-level pod/container metrics are
+# usually worth keeping, unlike the control-plane ones above.
+kubelet:
+  namespace: dns-monitoring
 
 prometheus:
   prometheusSpec:
@@ -177,6 +193,3 @@ grafana:
           - dns-stats.internal.lan
 
   defaultDashboardsTimezone: browser
-
-
-

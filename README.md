@@ -62,8 +62,8 @@ assumptions in the first draft of this stack:
 Optional, same reasoning as before — recommended given it now shares a
 cluster with something operationally important. If you add nodes for this:
 ```bash
-kubectl taint nodes <new-node-name> workload=monitoring:NoSchedule
-kubectl label nodes <new-node-name> workload=monitoring
+kubectl taint nodes node-03 workload=monitoring:NoSchedule
+kubectl label nodes node-03 workload=monitoring
 ```
 Otherwise delete the `tolerations:`/`nodeSelector:` blocks in `values.yaml`
 and `postgres.yaml`.
