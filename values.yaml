@@ -91,8 +91,8 @@ prometheus:
       - job_name: "pihole"
         scrape_interval: 60s
         static_configs:
-          - targets: ["<branch-01-ip>:9617"]
-            labels: { site: "branch-01" }
+          - targets: ["192.168.3.12:9617"]
+            labels: { site: "test" }
 #          - targets: ["<branch-02-ip>:9617"]
 #            labels: { site: "branch-02" }
 #          - targets: ["<branch-03-ip>:9617"]
@@ -139,8 +139,8 @@ alertmanager:
       # README. If the mailbox has MFA, smtp_auth_password must be an app
       # password, not the normal login password.
       smtp_smarthost: "smtp.office365.com:587"
-      smtp_from: "<alerts-mailbox@betxchange.co.za>"   # PLACEHOLDER: real sending mailbox
-      smtp_auth_username: "<alerts-mailbox@betxchange.co.za>"   # PLACEHOLDER: same mailbox
+      smtp_from: "<it@betxchange.co.za>"   # PLACEHOLDER: real sending mailbox
+      smtp_auth_username: "<it@betxchange.co.za>"   # PLACEHOLDER: same mailbox
       smtp_auth_password_file: "/etc/alertmanager/secrets/alertmanager-smtp-credentials/SMTP_PASSWORD"
       smtp_require_tls: true
     route:
