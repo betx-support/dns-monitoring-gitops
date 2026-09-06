@@ -51,9 +51,11 @@ spec:
         - protocol: TCP
           port: 3000
 ---
-# Egress: allow DNS resolution (needed by every pod) and allow reaching the
-# 25 branch exporters over your site-to-site VPN.
-# PLACEHOLDER: replace 10.90.0.0/16 with your actual VPN/branch CIDR range.
+# Egress: allow DNS resolution (needed by every pod) and allow reaching
+# Pi-hole exporters on port 9617, anywhere — opened up from an earlier
+# CIDR-restricted version since POC test hosts don't all sit on the
+# eventual branch VPN range yet. Worth re-tightening to a real CIDR (or
+# a set of them) once all branches are on known, stable addressing.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -73,18 +75,13 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    - to:
-        - ipBlock:
-            cidr: 10.90.0.0/16
-      ports:
+    - ports:
         - protocol: TCP
           port: 9617
 ---
-# Allow Alertmanager to reach smtp.office365.com on the SMTP submission
-# port (587, STARTTLS) rather than 443 — this is direct SMTP, not a
-# webhook. Restrict the destination CIDR further if you know Office 365's
-# published SMTP endpoint IP ranges and want to be stricter than
-# "any destination on 587".
+# Allow Alertmanager to reach out to Slack (or your notification target)
+# over HTTPS. Restrict further if you know Slack's egress IP ranges and
+# want to be stricter than "any HTTPS destination".
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -106,4 +103,4 @@ spec:
           port: 53
     - ports:
         - protocol: TCP
-          port: 587
+          port: 443

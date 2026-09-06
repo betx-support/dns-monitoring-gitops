@@ -25,4 +25,4 @@ kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/grafana-admin \
   GRAFANA_ADMIN_PASSWORD="<generated>"
 
 kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/alertmanager \
-  SMTP_PASSWORD="<office365-app-password>"   # app password if MFA is on this mailbox, else its login password
+  ALERTMANAGER_SLACK_WEBHOOK_URL="<your-real-slack-webhook-url>"

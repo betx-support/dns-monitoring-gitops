@@ -55,15 +55,6 @@ kubelet:
 prometheusOperator:
   admissionWebhooks:
     enabled: false
-  # Separate flag from admissionWebhooks.enabled above — this one gates
-  # whether the operator's own Deployment mounts a TLS secret
-  # (dns-monitoring-kube-promet-admission), used for the validating
-  # webhook and CRD conversion webhook. Disabling admissionWebhooks alone
-  # skips the cert-generation Job but NOT this mount, so the operator pod
-  # gets stuck in ContainerCreating forever waiting on a secret nothing
-  # ever creates. Both need to be off together for POC mode.
-  tls:
-    enabled: false
   # Same issue as Grafana's sidecars: with nothing set here, LimitRange's
   # 500m/512Mi default applies — more than the Operator itself needs.
   resources:
@@ -91,8 +82,8 @@ prometheus:
       - job_name: "pihole"
         scrape_interval: 60s
         static_configs:
-          - targets: ["192.168.3.12:9617"]
-            labels: { site: "test" }
+          - targets: ["<branch-01-ip>:9617"]
+            labels: { site: "branch-01" }
 #          - targets: ["<branch-02-ip>:9617"]
 #            labels: { site: "branch-02" }
 #          - targets: ["<branch-03-ip>:9617"]
@@ -114,7 +105,7 @@ alertmanager:
     replicas: 1
 
     secrets:
-      - alertmanager-smtp-credentials
+      - alertmanager-slack-webhook
 
     resources:
       requests:
@@ -133,16 +124,6 @@ alertmanager:
               storage: 2Gi
 
   config:
-    global:
-      # Office 365 direct SMTP. Requires SMTP AUTH enabled on this specific
-      # mailbox (disabled tenant-wide by default in Exchange Online) — see
-      # README. If the mailbox has MFA, smtp_auth_password must be an app
-      # password, not the normal login password.
-      smtp_smarthost: "smtp.office365.com:587"
-      smtp_from: "<it@betxchange.co.za>"   # PLACEHOLDER: real sending mailbox
-      smtp_auth_username: "<it@betxchange.co.za>"   # PLACEHOLDER: same mailbox
-      smtp_auth_password_file: "/etc/alertmanager/secrets/alertmanager-smtp-credentials/SMTP_PASSWORD"
-      smtp_require_tls: true
     route:
       receiver: "ops-team"
       group_by: ["site"]
@@ -151,8 +132,9 @@ alertmanager:
       repeat_interval: 4h
     receivers:
       - name: "ops-team"
-        email_configs:
-          - to: "it@betxchange.co.za"   # PLACEHOLDER: real recipient(s), comma-separated for multiple
+        slack_configs:
+          - slack_api_url_file: "/etc/alertmanager/secrets/alertmanager-slack-webhook/SLACK_WEBHOOK_URL"
+            channel: "#dns-alerts"
             send_resolved: true
 
 grafana:
