@@ -50,3 +50,20 @@ monitoring:
     enabled: false
   lokiCanary:
     enabled: false
+
+gateway:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+# Memcached-backed caching tier — unnecessary at this query volume
+# (one nightly rollup query, no interactive dashboarding against Loki
+# directly) and its default sizing (8Gi allocatedMemory → ~9.8Gi
+# container limit) exceeds this namespace's 2Gi-per-container LimitRange
+# cap anyway. Re-enable with a much smaller allocatedMemory if query
+# latency ever becomes a real problem.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
