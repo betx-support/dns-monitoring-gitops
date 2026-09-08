@@ -1,0 +1,116 @@
+# Metabase — the free, no-training-needed BI tool marketing opens
+# directly, per the "no Power BI budget" discussion.
+#
+# POC MODE simplification: this points Metabase's own application
+# database AND the data source it visualizes at the SAME postgres-rollup
+# instance. Fine at this scale (one small rollup table, one internal
+# analyst-facing tool); if Metabase's own metadata growth or query load
+# ever meaningfully contends with the rollup writes, split into two
+# separate Postgres instances (metabase-app-db + postgres-rollup) — same
+# StatefulSet/Secret pattern, just one more of each.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metabase
+  namespace: dns-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metabase
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metabase
+    spec:
+      containers:
+        - name: metabase
+          image: metabase/metabase:v0.51.4   # pin to a real current version before applying
+          ports:
+            - containerPort: 3000
+          env:
+            - name: MB_DB_TYPE
+              value: postgres
+            - name: MB_DB_HOST
+              value: postgres-rollup.dns-monitoring.svc.cluster.local
+            - name: MB_DB_PORT
+              value: "5432"
+            - name: MB_DB_DBNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-rollup-credentials
+                  key: POSTGRES_DB
+            - name: MB_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-rollup-credentials
+                  key: POSTGRES_USER
+            - name: MB_DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-rollup-credentials
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metabase
+  namespace: dns-monitoring
+  labels:
+    app.kubernetes.io/name: metabase
+spec:
+  selector:
+    app.kubernetes.io/name: metabase
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: ClusterIP
+---
+# Same ingress conventions as Grafana in values.yaml: internal-ca-issuer,
+# nginx ingressClassName, TLS via cert-manager.
+#
+# metabase-admin-credentials (from Vault, see 08-dns-analytics-kv-and-
+# secrets.sh) is NOT wired into this Deployment as an env var — Metabase
+# has no supported "create this admin account on first boot" mechanism
+# via env vars. The first time this URL is opened, a human still has to
+# walk through Metabase's setup wizard and manually create the admin
+# account using the email/password stored at dns-monitoring/metabase-admin,
+# so the credential exists in Vault rather than only in someone's head.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: metabase
+  namespace: dns-monitoring
+  annotations:
+    cert-manager.io/cluster-issuer: "internal-ca-issuer"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dns-insights.internal.lan
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: metabase
+                port:
+                  number: 3000
+  tls:
+    - secretName: dns-insights-tls
+      hosts:
+        - dns-insights.internal.lan

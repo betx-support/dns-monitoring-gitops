@@ -8,13 +8,14 @@
 #                              and upserts into top_domains_daily in
 #                              postgres-rollup (see 11-postgres-rollup.yaml).
 #
-# AUTH: confirmed — all 25 branches share one Pi-hole admin password, so
-# collect.py logs in once per branch per run via Pi-hole v6's
-# session-token flow (POST to /api/auth, use the returned sid on the
-# top_domains call, then explicitly log out). Logging out matters more
-# than it looks: Pi-hole v6 caps concurrent sessions per instance, and a
-# collector that leaks a session every 15 minutes without releasing it
-# will eventually lock itself out of its own target.
+# STILL A PLACEHOLDER, same spirit as the branch IPs elsewhere in this
+# stack: Pi-hole's API auth. As written, collect.py assumes an
+# unauthenticated (or already-network-restricted) top_domains endpoint.
+# If your Pi-hole instances require the v6 session-token flow (POST
+# password to /api/auth, use the returned sid on subsequent calls), add a
+# dns-monitoring/pihole-api Vault secret + ExternalSecret for the shared
+# admin password (same pattern as everything else here) and extend
+# collect.py with that auth step before this will actually work.
 #
 # BUILD-QUALITY NOTE: rollup.py installs psycopg2-binary via pip at
 # container start rather than baking a real image — acceptable for a POC
@@ -45,33 +46,15 @@ data:
     import os, json, time, urllib.request, urllib.error
 
     BRANCHES = json.load(open("/config/branches.json"))
-    PIHOLE_API_PASSWORD = os.environ["PIHOLE_API_PASSWORD"]
     LOKI_PUSH_URL = os.environ.get(
         "LOKI_PUSH_URL",
         "http://loki.dns-monitoring.svc.cluster.local:3100/loki/api/v1/push",
     )
 
-    def _call(method, url, payload=None, sid=None):
-        headers = {"Content-Type": "application/json"}
-        if sid:
-            headers["X-FTL-SID"] = sid
-        data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+    def fetch_top_domains(host):
+        url = f"http://{host}/api/stats/top_domains?count=100"
+        with urllib.request.urlopen(url, timeout=10) as resp:
             return json.load(resp)
-
-    def login(host):
-        result = _call("POST", f"http://{host}/api/auth", {"password": PIHOLE_API_PASSWORD})
-        return result["session"]["sid"]
-
-    def logout(host, sid):
-        try:
-            _call("DELETE", f"http://{host}/api/auth", sid=sid)
-        except Exception:
-            pass  # best-effort — an unreleased session just expires on its own
-
-    def fetch_top_domains(host, sid):
-        return _call("GET", f"http://{host}/api/stats/top_domains?count=100", sid=sid)
 
     def push_to_loki(branch, payload):
         entries = payload.get("top_domains", [])
@@ -84,17 +67,12 @@ data:
         urllib.request.urlopen(req, timeout=10)
 
     for branch, host in BRANCHES.items():
-        sid = None
         try:
-            sid = login(host)
-            data = fetch_top_domains(host, sid)
+            data = fetch_top_domains(host)
             push_to_loki(branch, data)
             print(f"[ok] {branch}: pushed {len(data.get('top_domains', []))} domains")
         except Exception as e:
-            print(f"[warn] {branch} ({host}) failed: {e}")
-        finally:
-            if sid:
-                logout(host, sid)
+            print(f"[warn] {branch} ({host}) unreachable: {e}")
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -116,9 +94,6 @@ spec:
             - name: collector
               image: python:3.12-alpine
               command: ["python", "/scripts/collect.py"]
-              envFrom:
-                - secretRef:
-                    name: pihole-api-credentials
               volumeMounts:
                 - name: script
                   mountPath: /scripts

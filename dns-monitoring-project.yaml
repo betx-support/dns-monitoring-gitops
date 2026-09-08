@@ -1,15 +1,9 @@
-# Mirrors project.yaml's per-app AppProject pattern (sourceRepos/destinations
-# scoped to exactly this app), with one deliberate difference from
-# snipeit-project: clusterResourceWhitelist is NOT empty here.
-#
-# Why: kube-prometheus-stack installs genuinely cluster-scoped resources —
-# its CRDs (Prometheus, Alertmanager, ServiceMonitor, PrometheusRule, etc.),
-# ClusterRole/ClusterRoleBinding for the Operator's broad watch permissions,
-# and admission webhooks for validating those CRDs. SnipeIT's project can
-# stay locked down to zero cluster-scoped resources because it genuinely
-# doesn't need any; copying that here verbatim would make the Helm
-# Application's sync fail outright the first time ArgoCD tries to apply a
-# CRD or ClusterRole.
+# UPDATED — adds https://grafana.github.io/helm-charts as a permitted
+# source repo, for the new dns-monitoring-loki Helm Application
+# (argocd-application-loki.yaml). Everything else is unchanged from the
+# original dns-monitoring-project.yaml; see that file's original comments
+# for why clusterResourceWhitelist isn't empty here and why kube-system
+# is a permitted destination.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -18,30 +12,15 @@ metadata:
 spec:
   sourceRepos:
     - https://github.com/betx-support/dns-monitoring-gitops.git
-    # Helm chart source for kube-prometheus-stack, added because the
-    # Application now uses ArgoCD's multi-source feature (one source pulls
-    # the chart from here, the other pulls values.yaml from the git repo
-    # above) — see argocd-application-helm.yaml.
+    # kube-prometheus-stack's Helm chart source.
     - https://prometheus-community.github.io/helm-charts
+    # Loki's Helm chart source, added for the marketing-analytics addition.
+    - https://grafana.github.io/helm-charts
   destinations:
     - namespace: dns-monitoring
       server: https://kubernetes.default.svc
-    # kube-prometheus-stack has several components (kubelet monitoring,
-    # optionally kube-state-metrics targets, etc.) that place Service/
-    # Endpoints objects directly in kube-system rather than dns-monitoring.
-    # Chasing each one individually via values.yaml overrides kept
-    # surfacing new ones, so allowing this destination directly instead.
-    # Bigger blast radius than the rest of this project (kube-system holds
-    # cluster-critical components) — if that's a concern, revisit by
-    # auditing `helm template` output for every kube-system-namespaced
-    # resource and redirecting/disabling them one by one instead.
     - namespace: kube-system
       server: https://kubernetes.default.svc
-  # POC MODE: MutatingWebhookConfiguration/ValidatingWebhookConfiguration
-  # removed from the whitelist since prometheusOperator.admissionWebhooks
-  # is disabled in values.yaml for now — the chart won't try to create
-  # them. Add both back if you re-enable admission webhooks later, or the
-  # Application's sync will fail on an object this project doesn't permit.
   clusterResourceWhitelist:
     - group: "apiextensions.k8s.io"
       kind: "CustomResourceDefinition"

@@ -1,0 +1,46 @@
+# UPDATED for the marketing-analytics addition. Same ResourceQuota/
+# LimitRange objects as the original 00-namespace.yaml — only the numbers
+# changed, to account for three new long-running pods (postgres-rollup,
+# loki, metabase) plus their PVCs, on top of the existing three
+# (prometheus, alertmanager, grafana). CronJob job-pods are transient and
+# generally don't hold the "pods" count for long, but a small buffer is
+# included in case a collector/rollup run overlaps with normal traffic.
+#
+# Namespace itself still intentionally not defined here — see the
+# original file's comment on why (CreateNamespace=true handles it).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dns-monitoring-quota
+  namespace: dns-monitoring
+spec:
+  hard:
+    requests.cpu: "1800m"
+    requests.memory: "3.5Gi"
+    limits.cpu: "4000m"
+    limits.memory: "6Gi"
+    requests.storage: "60Gi"
+    persistentvolumeclaims: "6"
+    pods: "10"
+---
+# Fallback requests/limits for any container in this namespace that
+# doesn't specify its own — unchanged from the original file; every new
+# component (postgres-rollup, loki, metabase, the two CronJobs) sets
+# explicit resources already, so this remains a pure safety net.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dns-monitoring-limits
+  namespace: dns-monitoring
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      max:
+        cpu: "1000m"
+        memory: "2Gi"

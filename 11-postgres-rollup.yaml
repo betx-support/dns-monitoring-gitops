@@ -1,0 +1,90 @@
+# Postgres for the daily "top sites" rollup table — NOT a revival of the
+# old Grafana-HA postgres.yaml pattern that was removed. That one existed
+# only so two Grafana pods could share state; this one exists because
+# Loki is the wrong shape of store for "here's a ranked list with names
+# in it, updated daily" (see the analytics design discussion). Single pod
+# + PVC, same durability-without-redundancy philosophy as values.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-rollup-init
+  namespace: dns-monitoring
+data:
+  001-schema.sql: |
+    CREATE TABLE IF NOT EXISTS top_domains_daily (
+      day          date        NOT NULL,
+      branch       text        NOT NULL,
+      domain       text        NOT NULL,
+      query_count  bigint      NOT NULL,
+      PRIMARY KEY (day, branch, domain)
+    );
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-rollup
+  namespace: dns-monitoring
+  labels:
+    app.kubernetes.io/name: postgres-rollup
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres-rollup
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-rollup
+  namespace: dns-monitoring
+spec:
+  serviceName: postgres-rollup
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-rollup
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-rollup
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          # Env names (POSTGRES_USER/PASSWORD/DB) match the official
+          # postgres image's expected variables exactly — no translation
+          # layer needed between the Vault secret and this container.
+          envFrom:
+            - secretRef:
+                name: postgres-rollup-credentials
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-rollup-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

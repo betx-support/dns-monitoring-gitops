@@ -28,13 +28,3 @@ kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/postgres-rollup \
 kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/metabase-admin \
   METABASE_ADMIN_EMAIL="<your-real-admin-email>" \
   METABASE_ADMIN_PASSWORD="<generated>"
-
-# Shared Pi-hole admin API password — same one password across all 25
-# branches, confirmed. Used by the domain-collector CronJob to authenticate
-# via Pi-hole v6's session-token flow (POST to /api/auth) before calling
-# top_domains. If this value has ever been typed into a chat window, a
-# ticket, or anywhere outside Vault/your password manager, rotate it on
-# all 25 Pi-holes before relying on this secret being the only place it
-# lives.
-kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/pihole-api \
-  PIHOLE_API_PASSWORD="<your-real-pihole-admin-password>"

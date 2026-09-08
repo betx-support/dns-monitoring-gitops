@@ -19,5 +19,4 @@ path "dns-monitoring/data/grafana-admin"    { capabilities = ["read"] }
 path "dns-monitoring/data/alertmanager"     { capabilities = ["read"] }
 path "dns-monitoring/data/postgres-rollup"  { capabilities = ["read"] }
 path "dns-monitoring/data/metabase-admin"   { capabilities = ["read"] }
-path "dns-monitoring/data/pihole-api"       { capabilities = ["read"] }
 EOF

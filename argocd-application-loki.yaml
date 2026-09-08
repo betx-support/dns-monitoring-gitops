@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dns-monitoring-loki
+  namespace: argocd
+spec:
+  project: dns-monitoring-project
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: loki
+      targetRevision: 6.6.6   # placeholder — pin to a real resolved chart version before applying
+      helm:
+        valueFiles:
+          - $values/values-loki.yaml
+    - repoURL: https://github.com/betx-support/dns-monitoring-gitops.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dns-monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      # Loki's chart doesn't hit the same CRD-annotation-size problem
+      # kube-prometheus-stack does, so ServerSideApply isn't strictly
+      # required here — included anyway for consistency with the other
+      # Helm Application in this project.
+      - ServerSideApply=true

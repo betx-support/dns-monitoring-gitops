@@ -1,0 +1,71 @@
+# Additional NetworkPolicies for the marketing-analytics addition.
+#
+# Most pod-to-pod traffic these new components need (collector -> Loki,
+# rollup job -> Loki, rollup job -> postgres-rollup, Metabase ->
+# postgres-rollup) is already covered by 02-networkpolicy.yaml's existing
+# allow-intra-namespace rule (any pod in dns-monitoring can reach any
+# other pod in dns-monitoring on ingress) and by the fact that egress is
+# open by default for any pod not specifically selected by a restrictive
+# Egress NetworkPolicy — which none of postgres-rollup, loki, or metabase
+# are. Only two genuinely new rules are needed:
+
+# Metabase reachable from the same ingress-nginx controller as Grafana.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-nginx-metabase
+  namespace: dns-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: metabase
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Domain-collector CronJob pods: DNS resolution, reaching each Pi-hole's
+# API, and pushing into Loki. This is the one new component that DOES
+# need an explicit egress rule — attaching policyTypes: [Egress] at all
+# makes this policy exhaustive for the pods it selects, so the
+# in-namespace Loki leg has to be listed here too, not left to
+# allow-intra-namespace (that rule only governs ingress, not egress).
+# Branch access is opened up rather than CIDR-restricted for now, same
+# reasoning as allow-egress-dns-and-branches in 02-networkpolicy.yaml —
+# tighten once all branches sit on known addressing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-domain-collector
+  namespace: dns-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pihole-domain-collector
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    # Loki push endpoint, in-namespace.
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 3100
