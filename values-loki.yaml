@@ -1,7 +1,3 @@
-# values-loki.yaml — Loki's own equivalent of what values.yaml does for
-# kube-prometheus-stack: single-binary deployment mode (one pod), not
-# Loki's horizontally-scaled microservices architecture, since 25
-# branches' worth of daily top-domains data doesn't remotely need it.
 loki:
   auth_enabled: false
   commonConfig:
@@ -24,10 +20,13 @@ singleBinary:
       cpu: 500m
       memory: 1Gi
 
-# Disable the extra components the "loki" umbrella chart enables by
-# default (gateway, canary, test pods) that single-binary mode doesn't
-# need — same "cut object count for a POC" reasoning as values.yaml's
-# kubeStateMetrics/nodeExporter/admissionWebhooks: false.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
 gateway:
   enabled: false
 lokiCanary:
