@@ -43,7 +43,7 @@ data:
   # 25 branch IPs/hostnames, keyed by branch name. Add entries as needed.
   branches.json: |
     {
-      "branch-01": "<branch-01-ip>"
+      "test": "192.168.3.12"
     }
 ---
 apiVersion: v1
