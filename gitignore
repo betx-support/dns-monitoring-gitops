@@ -1,0 +1,38 @@
+# ── Vault secrets — never commit these ───────────────────────────────────────
+vault-init-output.txt
+*root-token*
+*unseal-key*
+
+# ── Local secret overrides ────────────────────────────────────────────────────
+# If you ever create a local file to hold real values instead of editing the
+# tracked scripts directly (the safer pattern going forward), ignore it here:
+.env
+.env.*
+*.local.sh
+*.local.yaml
+secrets.local.*
+
+# ── TLS / CA material ─────────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+internal-ca.crt
+
+# ── Kubeconfig, if one ever ends up in this directory by accident ────────────
+kubeconfig
+*.kubeconfig
+.kube/
+
+# ── Downloaded Helm chart artifacts ───────────────────────────────────────────
+# From `helm pull --untar` during the CRD troubleshooting — these are pulled
+# fresh from the chart repo, not something this repo should track.
+kube-prometheus-stack/
+*.tgz
+
+# ── OS / editor junk ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

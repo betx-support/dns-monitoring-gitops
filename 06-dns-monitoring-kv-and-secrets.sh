@@ -11,7 +11,7 @@ set -euo pipefail
 
 ROOT_TOKEN="<root-token>"   # from vault-init-output.txt — never hard-code for real use
 
-kubectl exec -n vault vault-0 -- vault login "$ROOT_TOKEN"
+kubectl exec -n vault vault-0 -- vault login "vault_token"
 
 kubectl exec -n vault vault-0 -- vault secrets enable -path=dns-monitoring kv-v2
 
@@ -22,7 +22,7 @@ kubectl exec -n vault vault-0 -- vault secrets enable -path=dns-monitoring kv-v2
 
 kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/grafana-admin \
   GRAFANA_ADMIN_USER="admin" \
-  GRAFANA_ADMIN_PASSWORD="<generated>"
+  GRAFANA_ADMIN_PASSWORD=$(openssl rand -base64 24)
 
 kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/alertmanager \
   ALERTMANAGER_SLACK_WEBHOOK_URL="<your-real-slack-webhook-url>"

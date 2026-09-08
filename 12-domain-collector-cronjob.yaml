@@ -1,0 +1,234 @@
+# Two CronJobs implementing the collection -> rollup pipeline from the
+# design discussion:
+#   pihole-domain-collector — polls each Pi-hole's top_domains endpoint on
+#                              a schedule, pushes raw records into Loki as
+#                              log lines, tagged by branch.
+#   dns-analytics-rollup    — runs once daily, reads the last 24h back out
+#                              of Loki, aggregates per (branch, domain),
+#                              and upserts into top_domains_daily in
+#                              postgres-rollup (see 11-postgres-rollup.yaml).
+#
+# AUTH: confirmed — all 25 branches share one Pi-hole admin password, so
+# collect.py logs in once per branch per run via Pi-hole v6's
+# session-token flow (POST to /api/auth, use the returned sid on the
+# top_domains call, then explicitly log out). Logging out matters more
+# than it looks: Pi-hole v6 caps concurrent sessions per instance, and a
+# collector that leaks a session every 15 minutes without releasing it
+# will eventually lock itself out of its own target.
+#
+# BUILD-QUALITY NOTE: rollup.py installs psycopg2-binary via pip at
+# container start rather than baking a real image — acceptable for a POC
+# job that runs once a day, but worth building a small dedicated image
+# (or picking an existing one with it preinstalled) if this becomes a
+# permanent fixture, to stop depending on PyPI being reachable every run.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pihole-branch-hosts
+  namespace: dns-monitoring
+data:
+  # PLACEHOLDER, same as values.yaml's additionalScrapeConfigs — your real
+  # 25 branch IPs/hostnames, keyed by branch name. Add entries as needed.
+  branches.json: |
+    {
+      "branch-01": "<branch-01-ip>"
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pihole-domain-collector-script
+  namespace: dns-monitoring
+data:
+  collect.py: |
+    import os, json, time, urllib.request, urllib.error
+
+    BRANCHES = json.load(open("/config/branches.json"))
+    PIHOLE_API_PASSWORD = os.environ["PIHOLE_API_PASSWORD"]
+    LOKI_PUSH_URL = os.environ.get(
+        "LOKI_PUSH_URL",
+        "http://loki.dns-monitoring.svc.cluster.local:3100/loki/api/v1/push",
+    )
+
+    def _call(method, url, payload=None, sid=None):
+        headers = {"Content-Type": "application/json"}
+        if sid:
+            headers["X-FTL-SID"] = sid
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.load(resp)
+
+    def login(host):
+        result = _call("POST", f"http://{host}/api/auth", {"password": PIHOLE_API_PASSWORD})
+        return result["session"]["sid"]
+
+    def logout(host, sid):
+        try:
+            _call("DELETE", f"http://{host}/api/auth", sid=sid)
+        except Exception:
+            pass  # best-effort — an unreleased session just expires on its own
+
+    def fetch_top_domains(host, sid):
+        return _call("GET", f"http://{host}/api/stats/top_domains?count=100", sid=sid)
+
+    def push_to_loki(branch, payload):
+        entries = payload.get("top_domains", [])
+        if not entries:
+            return
+        ts_ns = str(int(time.time() * 1e9))
+        lines = [[ts_ns, json.dumps({"branch": branch, "domain": d["domain"], "count": d["count"]})] for d in entries]
+        body = json.dumps({"streams": [{"stream": {"job": "pihole-domain-collector", "branch": branch}, "values": lines}]}).encode()
+        req = urllib.request.Request(LOKI_PUSH_URL, data=body, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+
+    for branch, host in BRANCHES.items():
+        sid = None
+        try:
+            sid = login(host)
+            data = fetch_top_domains(host, sid)
+            push_to_loki(branch, data)
+            print(f"[ok] {branch}: pushed {len(data.get('top_domains', []))} domains")
+        except Exception as e:
+            print(f"[warn] {branch} ({host}) failed: {e}")
+        finally:
+            if sid:
+                logout(host, sid)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pihole-domain-collector
+  namespace: dns-monitoring
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: pihole-domain-collector
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: collector
+              image: python:3.12-alpine
+              command: ["python", "/scripts/collect.py"]
+              envFrom:
+                - secretRef:
+                    name: pihole-api-credentials
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                - name: branches
+                  mountPath: /config
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+          volumes:
+            - name: script
+              configMap:
+                name: pihole-domain-collector-script
+            - name: branches
+              configMap:
+                name: pihole-branch-hosts
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dns-analytics-rollup-script
+  namespace: dns-monitoring
+data:
+  rollup.py: |
+    import os, json, time, urllib.request, urllib.parse
+    from collections import defaultdict
+    import psycopg2
+
+    LOKI_QUERY_URL = os.environ.get(
+        "LOKI_QUERY_URL",
+        "http://loki.dns-monitoring.svc.cluster.local:3100/loki/api/v1/query_range",
+    )
+
+    now = int(time.time())
+    start = now - 24 * 3600
+    params = urllib.parse.urlencode({
+        "query": '{job="pihole-domain-collector"}',
+        "start": str(start * 1_000_000_000),
+        "end": str(now * 1_000_000_000),
+        "limit": "5000",
+    })
+    with urllib.request.urlopen(f"{LOKI_QUERY_URL}?{params}", timeout=30) as resp:
+        result = json.load(resp)
+
+    totals = defaultdict(int)
+    for stream in result.get("data", {}).get("result", []):
+        for _, line in stream.get("values", []):
+            rec = json.loads(line)
+            totals[(rec["branch"], rec["domain"])] += rec["count"]
+
+    conn = psycopg2.connect(
+        host="postgres-rollup.dns-monitoring.svc.cluster.local",
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+    )
+    cur = conn.cursor()
+    today = time.strftime("%Y-%m-%d")
+    for (branch, domain), count in totals.items():
+        cur.execute(
+            """
+            INSERT INTO top_domains_daily (day, branch, domain, query_count)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (day, branch, domain)
+            DO UPDATE SET query_count = EXCLUDED.query_count
+            """,
+            (today, branch, domain, count),
+        )
+    conn.commit()
+    print(f"[ok] wrote {len(totals)} (branch, domain) rows for {today}")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dns-analytics-rollup
+  namespace: dns-monitoring
+spec:
+  # Runs shortly after midnight, giving the day's last collector runs time
+  # to land in Loki before the aggregation query's 24h window closes.
+  schedule: "20 0 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: dns-analytics-rollup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: rollup
+              image: python:3.12-slim
+              command: ["sh", "-c", "pip install --quiet psycopg2-binary && python /scripts/rollup.py"]
+              envFrom:
+                - secretRef:
+                    name: postgres-rollup-credentials
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 300m
+                  memory: 256Mi
+          volumes:
+            - name: script
+              configMap:
+                name: dns-analytics-rollup-script

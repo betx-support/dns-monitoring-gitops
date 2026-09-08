@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# .git/hooks/pre-commit
+#
+# Blocks a commit if gitleaks detects anything that looks like a secret
+# (API tokens, private keys, Vault tokens — including HashiCorp's own
+# "hvs." token prefix) in the staged changes. This is the check that
+# would have caught the Vault root token before it ever reached a commit,
+# rather than relying on GitHub's push protection to catch it afterward.
+#
+# One-time setup:
+#   1. Install gitleaks: https://github.com/gitleaks/gitleaks#installing
+#      (or: brew install gitleaks / go install github.com/gitleaks/gitleaks/v8@latest)
+#   2. Copy this file to .git/hooks/pre-commit in your local clone
+#   3. chmod +x .git/hooks/pre-commit
+#
+# Note: .git/hooks is NOT tracked by git — every clone needs this installed
+# locally. If you want it enforced for everyone automatically, look into
+# a shared hooks path (`git config core.hooksPath .githooks/`) committed
+# to the repo instead of relying on each person copying this manually.
+
+set -euo pipefail
+
+if ! command -v gitleaks &>/dev/null; then
+  echo "⚠️  gitleaks not installed — skipping secret scan."
+  echo "    Install it: https://github.com/gitleaks/gitleaks#installing"
+  echo "    Proceeding with commit WITHOUT a secret scan."
+  exit 0
+fi
+
+echo "🔍 Scanning staged changes for secrets..."
+if ! gitleaks protect --staged --verbose; then
+  echo ""
+  echo "❌ Commit blocked — gitleaks found what looks like a secret in your"
+  echo "   staged changes. Remove it before committing, or if this is a"
+  echo "   genuine false positive, see gitleaks docs for adding an inline"
+  echo "   allowlist comment rather than bypassing the hook entirely."
+  exit 1
+fi
+
+echo "✅ No secrets detected."
