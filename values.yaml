@@ -23,6 +23,13 @@ crds:
 # --- Cluster-monitoring components, disabled: this stack watches 25
 # external Pi-holes, not this Kubernetes cluster's own health, so these
 # are pure overhead on top of what you actually need. ---
+
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+
 kubeControllerManager:
   enabled: false
 kubeScheduler:
