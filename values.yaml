@@ -24,11 +24,6 @@ crds:
 # external Pi-holes, not this Kubernetes cluster's own health, so these
 # are pure overhead on top of what you actually need. ---
 
-prometheusOperator:
-  admissionWebhooks:
-    enabled: false
-  tls:
-    enabled: false
 
 kubeControllerManager:
   enabled: false
@@ -62,8 +57,8 @@ kubelet:
 prometheusOperator:
   admissionWebhooks:
     enabled: false
-  # Same issue as Grafana's sidecars: with nothing set here, LimitRange's
-  # 500m/512Mi default applies — more than the Operator itself needs.
+  tls:
+    enabled: false
   resources:
     requests:
       cpu: 100m
@@ -71,6 +66,8 @@ prometheusOperator:
     limits:
       cpu: 200m
       memory: 256Mi
+  # Same issue as Grafana's sidecars: with nothing set here, LimitRange's
+  # 500m/512Mi default applies — more than the Operator itself needs.
 
 prometheus:
   prometheusSpec:
