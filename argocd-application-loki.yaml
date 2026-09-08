@@ -8,7 +8,7 @@ spec:
   sources:
     - repoURL: https://grafana.github.io/helm-charts
       chart: loki
-      targetRevision: 6.6.6   # placeholder — pin to a real resolved chart version before applying
+      targetRevision: 6.55.0   # placeholder — pin to a real resolved chart version before applying
       helm:
         valueFiles:
           - $values/values-loki.yaml
