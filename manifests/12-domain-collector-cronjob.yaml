@@ -8,21 +8,24 @@
 #                              and upserts into top_domains_daily in
 #                              postgres-rollup (see 11-postgres-rollup.yaml).
 #
-# UPDATED (v2): collect.py URL-encodes the session id (sid) before putting
-# it in the top_domains query string. The sid is a base64 string that can
-# contain '+', '/', '=' — left un-encoded, '+' in particular gets silently
-# read as a literal space by the HTTP server, corrupting the sid and
-# causing a 401 on the top_domains call even though the preceding
-# /api/auth login succeeded. Pi-hole's own docs call this out explicitly:
-# "your SID needs to be URL-encoded" when passed in the request URI.
+# UPDATED (v3): collect.py now reads the "domains" key from Pi-hole's v6
+# /api/stats/top_domains response, not "top_domains". Confirmed via direct
+# curl testing that the actual response shape is:
+#   {"domains": [{"domain": "...", "count": N}, ...], "total_queries": N,
+#    "blocked_queries": N, "took": ...}
+# The old key name (payload.get("top_domains", [])) silently returned an
+# empty list every run — no exception, just 0 domains pushed — which is
+# why every prior [ok] log line showed "pushed 0 domains" even though
+# authentication and connectivity were both working correctly.
+#
+# UPDATED (v2, carried over): collect.py URL-encodes the session id (sid)
+# before putting it in the top_domains query string, since it's base64
+# and can contain '+', '/', '=' that get corrupted if left un-encoded.
 #
 # UPDATED (v1, carried over): collect.py authenticates against each
 # Pi-hole's v6 session API (POST password -> /api/auth -> sid) before
 # calling top_domains, using the shared admin password from
-# pihole-api-credentials (see 15-external-secret-pihole.yaml). Each run
-# re-authenticates fresh per branch rather than caching/reusing a sid
-# across the 15-minute schedule — simpler, and avoids session-expiry
-# handling for a job that only runs every 15 minutes anyway.
+# pihole-api-credentials (see 15-external-secret-pihole.yaml).
 #
 # BUILD-QUALITY NOTE (unchanged): rollup.py installs psycopg2-binary via
 # pip at container start rather than baking a real image — acceptable for
@@ -40,7 +43,7 @@ data:
   # 25 branch IPs/hostnames, keyed by branch name. Add entries as needed.
   branches.json: |
     {
-      "test": "192.168.3.12"
+      "branch-01": "<branch-01-ip>"
     }
 ---
 apiVersion: v1
@@ -82,7 +85,9 @@ data:
             return json.load(resp)
 
     def push_to_loki(branch, payload):
-        entries = payload.get("top_domains", [])
+        # The v6 API's response key is "domains", NOT "top_domains" —
+        # confirmed against a real Pi-hole instance's actual response.
+        entries = payload.get("domains", [])
         if not entries:
             return
         ts_ns = str(int(time.time() * 1e9))
@@ -96,7 +101,7 @@ data:
             sid = get_session_id(host)
             data = fetch_top_domains(host, sid)
             push_to_loki(branch, data)
-            print(f"[ok] {branch}: pushed {len(data.get('top_domains', []))} domains")
+            print(f"[ok] {branch}: pushed {len(data.get('domains', []))} domains")
         except Exception as e:
             print(f"[warn] {branch} ({host}) unreachable: {e}")
 ---
