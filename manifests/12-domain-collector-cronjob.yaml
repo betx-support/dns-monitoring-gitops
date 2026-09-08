@@ -8,13 +8,21 @@
 #                              and upserts into top_domains_daily in
 #                              postgres-rollup (see 11-postgres-rollup.yaml).
 #
-# UPDATED: collect.py now authenticates against each Pi-hole's v6 session
-# API (POST password -> /api/auth -> sid) before calling top_domains,
-# using the shared admin password from pihole-api-credentials (see
-# 15-external-secret-pihole.yaml). Each run re-authenticates fresh per
-# branch rather than caching/reusing a sid across the 15-minute schedule
-# — simpler, and avoids session-expiry handling for a job that only runs
-# every 15 minutes anyway.
+# UPDATED (v2): collect.py URL-encodes the session id (sid) before putting
+# it in the top_domains query string. The sid is a base64 string that can
+# contain '+', '/', '=' — left un-encoded, '+' in particular gets silently
+# read as a literal space by the HTTP server, corrupting the sid and
+# causing a 401 on the top_domains call even though the preceding
+# /api/auth login succeeded. Pi-hole's own docs call this out explicitly:
+# "your SID needs to be URL-encoded" when passed in the request URI.
+#
+# UPDATED (v1, carried over): collect.py authenticates against each
+# Pi-hole's v6 session API (POST password -> /api/auth -> sid) before
+# calling top_domains, using the shared admin password from
+# pihole-api-credentials (see 15-external-secret-pihole.yaml). Each run
+# re-authenticates fresh per branch rather than caching/reusing a sid
+# across the 15-minute schedule — simpler, and avoids session-expiry
+# handling for a job that only runs every 15 minutes anyway.
 #
 # BUILD-QUALITY NOTE (unchanged): rollup.py installs psycopg2-binary via
 # pip at container start rather than baking a real image — acceptable for
@@ -42,7 +50,7 @@ metadata:
   namespace: dns-monitoring
 data:
   collect.py: |
-    import os, json, time, urllib.request, urllib.error
+    import os, json, time, urllib.request, urllib.error, urllib.parse
 
     BRANCHES = json.load(open("/config/branches.json"))
     LOKI_PUSH_URL = os.environ.get(
@@ -65,7 +73,11 @@ data:
             return data["session"]["sid"]
 
     def fetch_top_domains(host, sid):
-        url = f"http://{host}/api/stats/top_domains?count=100&sid={sid}"
+        # sid is base64 and can contain +, /, = — must be percent-encoded
+        # or it gets corrupted in transit (e.g. '+' silently becomes a
+        # space), which causes a 401 on this call even with a valid sid.
+        safe_sid = urllib.parse.quote(sid, safe="")
+        url = f"http://{host}/api/stats/top_domains?count=100&sid={safe_sid}"
         with urllib.request.urlopen(url, timeout=10) as resp:
             return json.load(resp)
 
@@ -108,10 +120,6 @@ spec:
             - name: collector
               image: python:3.12-alpine
               command: ["python", "/scripts/collect.py"]
-              # NEW: supplies PIHOLE_API_PASSWORD to collect.py's
-              # get_session_id() call. Requires pihole-api-credentials
-              # (from 15-external-secret-pihole.yaml) to exist and be
-              # SYNCED before this CronJob's pods will run successfully.
               envFrom:
                 - secretRef:
                     name: pihole-api-credentials
