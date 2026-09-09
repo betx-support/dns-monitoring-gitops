@@ -84,7 +84,7 @@ metadata:
   namespace: dns-monitoring
 data:
   collect.py: |
-    import os, json, time, urllib.request, urllib.error, urllib.parse
+    import os, json, time, urllib.request, urllib.error, urllib.parse, traceback
 
     BRANCHES = json.load(open("/config/branches.json"))
     LOKI_PUSH_URL = os.environ.get(
@@ -136,6 +136,7 @@ data:
             print(f"[ok] {branch}: pushed {len(data.get('domains', []))} domains")
         except Exception as e:
             print(f"[warn] {branch} ({host}) unreachable: {e}")
+            traceback.print_exc()
 ---
 apiVersion: batch/v1
 kind: CronJob
