@@ -8,24 +8,48 @@
 #                              and upserts into top_domains_daily in
 #                              postgres-rollup (see 11-postgres-rollup.yaml).
 #
-# UPDATED (v3): collect.py now reads the "domains" key from Pi-hole's v6
-# /api/stats/top_domains response, not "top_domains". Confirmed via direct
-# curl testing that the actual response shape is:
-#   {"domains": [{"domain": "...", "count": N}, ...], "total_queries": N,
-#    "blocked_queries": N, "took": ...}
-# The old key name (payload.get("top_domains", [])) silently returned an
-# empty list every run — no exception, just 0 domains pushed — which is
-# why every prior [ok] log line showed "pushed 0 domains" even though
-# authentication and connectivity were both working correctly.
+# UPDATED (v4): all in-cluster FQDNs (Loki push/query URLs, the
+# postgres-rollup host) now use a trailing dot, e.g.
+# "loki.dns-monitoring.svc.cluster.local." instead of "...local". Without
+# it, musl libc's resolver (used by collect.py's python:3.12-alpine base,
+# and worth guarding rollup.py's python:3.12-slim/glibc base against too)
+# tries the pod's search-domain list first for any name with fewer dots
+# than the pod's ndots setting (default 5) — e.g.
+# "loki.dns-monitoring.svc.cluster.local.dns-monitoring.svc.cluster.local"
+# — gets a legitimate NXDOMAIN for that nonsense name, and (unlike glibc)
+# gives up entirely instead of falling through to the next search suffix
+# or the bare absolute name. A trailing dot forces an absolute lookup and
+# skips the whole search-list dance. Confirmed via direct testing: the
+# same short-name query that failed from a musl-based (busybox) pod
+# resolved correctly the instant a trailing dot was added, against an
+# otherwise fully healthy CoreDNS.
 #
-# UPDATED (v2, carried over): collect.py URL-encodes the session id (sid)
-# before putting it in the top_domains query string, since it's base64
-# and can contain '+', '/', '=' that get corrupted if left un-encoded.
+# UPDATED (v3): fixed a wrong-key bug in collect.py. Pi-hole v6's
+# /api/stats/top_domains response nests the list under "domains", not
+# "top_domains" — the earlier version's payload.get("top_domains", [])
+# silently fell through to the [] default every single run (no error, no
+# warning — just "[ok] <branch>: pushed 0 domains" forever), because dict
+# .get() with a default doesn't raise on a missing key. Confirmed via a
+# manual curl against a real branch: the live response is
+# {"domains": [...], "total_queries": ..., "blocked_queries": ..., ...}.
+# Both the push_to_loki() lookup and the [ok] log line's count were
+# reading the wrong key and are now fixed to read "domains".
+#
+# UPDATED (v2): collect.py URL-encodes the session id (sid) before putting
+# it in the top_domains query string. The sid is a base64 string that can
+# contain '+', '/', '=' — left un-encoded, '+' in particular gets silently
+# read as a literal space by the HTTP server, corrupting the sid and
+# causing a 401 on the top_domains call even though the preceding
+# /api/auth login succeeded. Pi-hole's own docs call this out explicitly:
+# "your SID needs to be URL-encoded" when passed in the request URI.
 #
 # UPDATED (v1, carried over): collect.py authenticates against each
 # Pi-hole's v6 session API (POST password -> /api/auth -> sid) before
 # calling top_domains, using the shared admin password from
-# pihole-api-credentials (see 15-external-secret-pihole.yaml).
+# pihole-api-credentials (see 15-external-secret-pihole.yaml). Each run
+# re-authenticates fresh per branch rather than caching/reusing a sid
+# across the 15-minute schedule — simpler, and avoids session-expiry
+# handling for a job that only runs every 15 minutes anyway.
 #
 # BUILD-QUALITY NOTE (unchanged): rollup.py installs psycopg2-binary via
 # pip at container start rather than baking a real image — acceptable for
@@ -58,7 +82,7 @@ data:
     BRANCHES = json.load(open("/config/branches.json"))
     LOKI_PUSH_URL = os.environ.get(
         "LOKI_PUSH_URL",
-        "http://loki.dns-monitoring.svc.cluster.local:3100/loki/api/v1/push",
+        "http://loki.dns-monitoring.svc.cluster.local.:3100/loki/api/v1/push",
     )
     PIHOLE_API_PASSWORD = os.environ["PIHOLE_API_PASSWORD"]
 
@@ -85,8 +109,9 @@ data:
             return json.load(resp)
 
     def push_to_loki(branch, payload):
-        # The v6 API's response key is "domains", NOT "top_domains" —
-        # confirmed against a real Pi-hole instance's actual response.
+        # Pi-hole v6's top_domains response nests the list under
+        # "domains", NOT "top_domains" — confirmed against a live branch:
+        # {"domains": [{"domain": ..., "count": ...}, ...], "total_queries": ...}
         entries = payload.get("domains", [])
         if not entries:
             return
@@ -161,7 +186,7 @@ data:
 
     LOKI_QUERY_URL = os.environ.get(
         "LOKI_QUERY_URL",
-        "http://loki.dns-monitoring.svc.cluster.local:3100/loki/api/v1/query_range",
+        "http://loki.dns-monitoring.svc.cluster.local.:3100/loki/api/v1/query_range",
     )
 
     now = int(time.time())
@@ -182,7 +207,7 @@ data:
             totals[(rec["branch"], rec["domain"])] += rec["count"]
 
     conn = psycopg2.connect(
-        host="postgres-rollup.dns-monitoring.svc.cluster.local",
+        host="postgres-rollup.dns-monitoring.svc.cluster.local.",
         dbname=os.environ["POSTGRES_DB"],
         user=os.environ["POSTGRES_USER"],
         password=os.environ["POSTGRES_PASSWORD"],
