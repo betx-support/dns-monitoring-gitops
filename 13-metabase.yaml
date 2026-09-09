@@ -50,12 +50,6 @@ spec:
                 secretKeyRef:
                   name: postgres-rollup-credentials
                   key: POSTGRES_PASSWORD
-            # Pin the JVM heap explicitly rather than letting it default off
-            # container memory limits — makes OOM behavior predictable and
-            # leaves headroom for Jetty thread stacks/off-heap buffers
-            # instead of the JVM claiming most of the 1Gi limit for heap.
-            - name: JAVA_TOOL_OPTIONS
-              value: "-Xmx768m"
           resources:
             requests:
               cpu: 200m
