@@ -50,19 +50,44 @@ spec:
                 secretKeyRef:
                   name: postgres-rollup-credentials
                   key: POSTGRES_PASSWORD
+            # Pin the JVM heap explicitly rather than letting it default off
+            # container memory limits — makes OOM behavior predictable and
+            # leaves headroom for Jetty thread stacks/off-heap buffers
+            # instead of the JVM claiming most of the 1Gi limit for heap.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xmx768m"
           resources:
             requests:
               cpu: 200m
               memory: 512Mi
             limits:
               cpu: 500m
-              memory: 1Gi
+              memory: 1536Mi
           readinessProbe:
             httpGet:
               path: /api/health
               port: 3000
             initialDelaySeconds: 30
             periodSeconds: 15
+            failureThreshold: 3
+          # Without this, a wedged-but-alive pod (e.g. Jetty thread pool
+          # exhaustion after a canceled/failed query — see the
+          # java.lang.AssertionError: "QP unexpectedly returned nil"
+          # incident) only ever gets marked not-ready. With a single
+          # replica, that means the Ingress has nowhere else to route to
+          # and every request 504s indefinitely until someone notices and
+          # manually restarts the pod. livenessProbe gives Kubernetes
+          # permission to kill and replace it automatically. Deliberately
+          # more lenient than readinessProbe (longer delay, higher
+          # failureThreshold) so a slow-but-recovering pod isn't killed
+          # for the same blip that just makes it temporarily not-ready.
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
 ---
 apiVersion: v1
 kind: Service
