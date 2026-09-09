@@ -8,21 +8,28 @@
 #                              and upserts into top_domains_daily in
 #                              postgres-rollup (see 11-postgres-rollup.yaml).
 #
+# UPDATED (v5): collector container switched from python:3.12-alpine to
+# python:3.12-slim (Debian/glibc), matching the image family rollup.py
+# already used successfully. No extra packages are needed for
+# collect.py (stdlib urllib/json/os/time only), so this is a zero-cost
+# swap. Root cause: musl libc (alpine's C library) has documented
+# getaddrinfo() quirks under AI_ADDRCONFIG that can produce sporadic
+# "Name does not resolve" errors even for literal IP addresses — worse,
+# it also gives up early on the pod's DNS search-domain fallback chain
+# for any hostname with fewer dots than ndots (default 5), where glibc
+# keeps trying. Confirmed by directly reproducing collect.py's exact
+# HTTP calls (including a literal-IP POST) inside a fresh
+# python:3.12-alpine debug pod on the same node/network path where the
+# real Job had just failed: ping, wget, and a literal-IP urllib.request
+# call all succeeded standalone, meaning the underlying network was
+# fine — pointing squarely at an image/libc-level resolver quirk in the
+# CronJob's actual run rather than a persistent network fault.
+#
 # UPDATED (v4): all in-cluster FQDNs (Loki push/query URLs, the
 # postgres-rollup host) now use a trailing dot, e.g.
-# "loki.dns-monitoring.svc.cluster.local." instead of "...local". Without
-# it, musl libc's resolver (used by collect.py's python:3.12-alpine base,
-# and worth guarding rollup.py's python:3.12-slim/glibc base against too)
-# tries the pod's search-domain list first for any name with fewer dots
-# than the pod's ndots setting (default 5) — e.g.
-# "loki.dns-monitoring.svc.cluster.local.dns-monitoring.svc.cluster.local"
-# — gets a legitimate NXDOMAIN for that nonsense name, and (unlike glibc)
-# gives up entirely instead of falling through to the next search suffix
-# or the bare absolute name. A trailing dot forces an absolute lookup and
-# skips the whole search-list dance. Confirmed via direct testing: the
-# same short-name query that failed from a musl-based (busybox) pod
-# resolved correctly the instant a trailing dot was added, against an
-# otherwise fully healthy CoreDNS.
+# "loki.dns-monitoring.svc.cluster.local." instead of "...local", as a
+# defensive measure against the same musl search-domain issue described
+# above for any DNS *name* lookups (as opposed to literal IPs).
 #
 # UPDATED (v3): fixed a wrong-key bug in collect.py. Pi-hole v6's
 # /api/stats/top_domains response nests the list under "domains", not
@@ -148,7 +155,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: collector
-              image: python:3.12-alpine
+              image: python:3.12-slim
               command: ["python", "/scripts/collect.py"]
               envFrom:
                 - secretRef:
