@@ -8,6 +8,20 @@
 #                              and upserts into top_domains_daily in
 #                              postgres-rollup (see 11-postgres-rollup.yaml).
 #
+# UPDATED (v6): fixed wrong Loki Service hostname in both collect.py's
+# LOKI_PUSH_URL and rollup.py's LOKI_QUERY_URL. Both pointed at
+# "loki.dns-monitoring.svc.cluster.local." — a name that never existed.
+# The Loki Helm chart prefixes the Helm release name onto the chart name,
+# and the release here is "dns-monitoring-loki" (per the ArgoCD
+# Application), so the real Service is "dns-monitoring-loki", confirmed
+# against `kubectl get svc -n dns-monitoring`. NOTE: this was a real bug
+# but does NOT explain the "[warn] ... HTTP Error 401: Unauthorized"
+# seen from the manual test run — that 401 can only come from Pi-hole's
+# /api/auth or /api/stats/top_domains calls (Loki's push endpoint isn't
+# behind Pi-hole auth), so a wrong Loki hostname would surface as a DNS
+# resolution error, not a 401. The 401 is still open; see
+# 15-test-collector-run.sh for how to capture the full traceback.
+#
 # UPDATED (v5): collector container switched from python:3.12-alpine to
 # python:3.12-slim (Debian/glibc), matching the image family rollup.py
 # already used successfully. No extra packages are needed for
@@ -89,7 +103,7 @@ data:
     BRANCHES = json.load(open("/config/branches.json"))
     LOKI_PUSH_URL = os.environ.get(
         "LOKI_PUSH_URL",
-        "http://loki.dns-monitoring.svc.cluster.local.:3100/loki/api/v1/push",
+        "http://dns-monitoring-loki.dns-monitoring.svc.cluster.local.:3100/loki/api/v1/push",
     )
     PIHOLE_API_PASSWORD = os.environ["PIHOLE_API_PASSWORD"]
 
@@ -194,7 +208,7 @@ data:
 
     LOKI_QUERY_URL = os.environ.get(
         "LOKI_QUERY_URL",
-        "http://loki.dns-monitoring.svc.cluster.local.:3100/loki/api/v1/query_range",
+        "http://dns-monitoring-loki.dns-monitoring.svc.cluster.local.:3100/loki/api/v1/query_range",
     )
 
     now = int(time.time())
