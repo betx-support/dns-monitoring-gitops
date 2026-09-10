@@ -1,23 +1,32 @@
-# UPDATED: Pipeline A (prometheus, alertmanager, grafana + their PVCs)
-# removed. Quota shrunk to match the real remaining footprint: three
-# long-running pods (postgres-rollup, loki, metabase) plus the two
-# CronJobs' transient pods. Math below is requests/limits summed from
-# each component's own manifest, with a buffer added for the rare case
-# where the two CronJobs' 15-min/daily schedules overlap with each other
-# or with a manual test run:
+# UPDATED: quota raised now that a second node (same spec: 6 vCPU,
+# ~7000Mi RAM) has been added to the cluster, giving this namespace real
+# headroom instead of fighting a razor-thin ceiling shared with the
+# Vault Agent Injector's per-pod init-container overhead.
 #
-#   requests.cpu:    postgres-rollup 100m + loki 200m + metabase 200m
-#                     = 500m, + ~180m buffer  -> 800m
-#   requests.memory: postgres-rollup 256Mi + loki 512Mi + metabase 512Mi
-#                     = 1280Mi, + buffer      -> 1.75Gi
-#   limits.cpu:      postgres-rollup 300m + loki 500m + metabase 500m
-#                     = 1300m, + CronJob peak -> 2000m
-#   limits.memory:   postgres-rollup 512Mi + loki 1Gi + metabase 1536Mi
-#                     = 3072Mi, + CronJob peak -> 4Gi
-#   requests.storage: postgres-rollup 5Gi + loki 20Gi = 25Gi, + buffer -> 30Gi
-#   persistentvolumeclaims: postgres-rollup(1) + loki(1) = 2, + buffer -> 3
-#   pods: 3 long-running + room for both CronJobs' pods overlapping,
-#         a manual test Job, and one ad-hoc debug pod -> 6
+# Why the previous ceiling kept getting hit: the injector's init
+# container on postgres-rollup/metabase/the two CronJobs, PLUS an extra
+# container on the Loki pod (2/2 Ready — the Loki chart runs more than
+# just the single "loki" container even with gateway/caches disabled),
+# meant real steady-state usage was already close to 1800m out of a
+# 2000m limits.cpu ceiling before any CronJob burst ran at all. The
+# rollup Job's own 300m + its 100m injector sidecar had nowhere to fit.
+#
+# New sizing rationale (deliberately generous, not razor-thin):
+#   - Steady-state long-running pods (postgres-rollup, loki, metabase,
+#     plus their injector init containers) currently observed around
+#     1800m CPU / ~3.5-4Gi memory.
+#   - Add room for BOTH CronJobs' burst pods to run concurrently without
+#     blocking each other (collector 100m+100m injector, rollup
+#     300m+100m injector = ~600m combined), plus a manual test job or
+#     ad-hoc debug pod on top.
+#   - Kept well under half of one node's total capacity (6 vCPU /
+#     ~6.8Gi), since this cluster is shared with another application
+#     (SnipeIT) and system pods (Cilium, CoreDNS, kube-proxy) also need
+#     headroom on every node — this is NOT sized to consume a whole node.
+#   - ttlSecondsAfterFinished: 300 (added separately, in
+#     12-domain-collector-cronjob.yaml) still matters here — this quota
+#     bump gives breathing room, it does not replace cleaning up
+#     finished pods promptly.
 #
 # Namespace itself still intentionally not defined here — see the
 # original file's comment on why (CreateNamespace=true handles it).
@@ -28,18 +37,17 @@ metadata:
   namespace: dns-monitoring
 spec:
   hard:
-    requests.cpu: "800m"
-    requests.memory: "1.75Gi"
-    limits.cpu: "2000m"
-    limits.memory: "4Gi"
+    requests.cpu: "1200m"
+    requests.memory: "2.5Gi"
+    limits.cpu: "3000m"
+    limits.memory: "6Gi"
     requests.storage: "30Gi"
     persistentvolumeclaims: "3"
-    pods: "6"
+    pods: "8"
 ---
 # Fallback requests/limits for any container in this namespace that
-# doesn't specify its own — unchanged; every remaining component
-# (postgres-rollup, loki, metabase, the two CronJobs) sets explicit
-# resources already, so this stays a pure safety net.
+# doesn't specify its own — unchanged; every component sets explicit
+# resources already, so this remains a pure safety net.
 apiVersion: v1
 kind: LimitRange
 metadata:
