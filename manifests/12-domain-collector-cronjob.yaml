@@ -1,82 +1,23 @@
-# Two CronJobs implementing the collection -> rollup pipeline from the
-# design discussion:
-#   pihole-domain-collector — polls each Pi-hole's top_domains endpoint on
-#                              a schedule, pushes raw records into Loki as
-#                              log lines, tagged by branch.
-#   dns-analytics-rollup    — runs once daily, reads the last 24h back out
-#                              of Loki, aggregates per (branch, domain),
-#                              and upserts into top_domains_daily in
-#                              postgres-rollup (see 11-postgres-rollup.yaml).
+# Two CronJobs implementing the collection -> rollup pipeline.
 #
-# UPDATED (v6): fixed wrong Loki Service hostname in both collect.py's
-# LOKI_PUSH_URL and rollup.py's LOKI_QUERY_URL. Both pointed at
-# "loki.dns-monitoring.svc.cluster.local." — a name that never existed.
-# The Loki Helm chart prefixes the Helm release name onto the chart name,
-# and the release here is "dns-monitoring-loki" (per the ArgoCD
-# Application), so the real Service is "dns-monitoring-loki", confirmed
-# against `kubectl get svc -n dns-monitoring`. NOTE: this was a real bug
-# but does NOT explain the "[warn] ... HTTP Error 401: Unauthorized"
-# seen from the manual test run — that 401 can only come from Pi-hole's
-# /api/auth or /api/stats/top_domains calls (Loki's push endpoint isn't
-# behind Pi-hole auth), so a wrong Loki hostname would surface as a DNS
-# resolution error, not a 401. The 401 is still open; see
-# 15-test-collector-run.sh for how to capture the full traceback.
+# UPDATED for Vault Agent Injector (replaces External Secrets Operator).
+# Both CronJobs' pod templates now need:
+#   - `serviceAccountName: dns-monitoring-eso` (see 11-postgres-rollup.yaml's
+#     comment for why this is required, not optional).
+#   - `agent-pre-populate-only: "true"` — CRITICAL for CronJobs
+#     specifically. Without this, the injector adds a persistent
+#     renewal sidecar that never exits. A Job pod can't reach Completed
+#     while ANY container is still running — collect.py/rollup.py
+#     finishing wouldn't matter, the Job would hang forever. Worse, both
+#     CronJobs use `concurrencyPolicy: Forbid`, so a hung Job blocks
+#     every subsequent scheduled run too — the 15-minute collector would
+#     silently stop firing entirely after its very first run.
+#   - Commands changed from array form (`["python", "/scripts/collect.py"]`)
+#     to shell form so the injected secret file can be sourced first.
 #
-# UPDATED (v5): collector container switched from python:3.12-alpine to
-# python:3.12-slim (Debian/glibc), matching the image family rollup.py
-# already used successfully. No extra packages are needed for
-# collect.py (stdlib urllib/json/os/time only), so this is a zero-cost
-# swap. Root cause: musl libc (alpine's C library) has documented
-# getaddrinfo() quirks under AI_ADDRCONFIG that can produce sporadic
-# "Name does not resolve" errors even for literal IP addresses — worse,
-# it also gives up early on the pod's DNS search-domain fallback chain
-# for any hostname with fewer dots than ndots (default 5), where glibc
-# keeps trying. Confirmed by directly reproducing collect.py's exact
-# HTTP calls (including a literal-IP POST) inside a fresh
-# python:3.12-alpine debug pod on the same node/network path where the
-# real Job had just failed: ping, wget, and a literal-IP urllib.request
-# call all succeeded standalone, meaning the underlying network was
-# fine — pointing squarely at an image/libc-level resolver quirk in the
-# CronJob's actual run rather than a persistent network fault.
-#
-# UPDATED (v4): all in-cluster FQDNs (Loki push/query URLs, the
-# postgres-rollup host) now use a trailing dot, e.g.
-# "loki.dns-monitoring.svc.cluster.local." instead of "...local", as a
-# defensive measure against the same musl search-domain issue described
-# above for any DNS *name* lookups (as opposed to literal IPs).
-#
-# UPDATED (v3): fixed a wrong-key bug in collect.py. Pi-hole v6's
-# /api/stats/top_domains response nests the list under "domains", not
-# "top_domains" — the earlier version's payload.get("top_domains", [])
-# silently fell through to the [] default every single run (no error, no
-# warning — just "[ok] <branch>: pushed 0 domains" forever), because dict
-# .get() with a default doesn't raise on a missing key. Confirmed via a
-# manual curl against a real branch: the live response is
-# {"domains": [...], "total_queries": ..., "blocked_queries": ..., ...}.
-# Both the push_to_loki() lookup and the [ok] log line's count were
-# reading the wrong key and are now fixed to read "domains".
-#
-# UPDATED (v2): collect.py URL-encodes the session id (sid) before putting
-# it in the top_domains query string. The sid is a base64 string that can
-# contain '+', '/', '=' — left un-encoded, '+' in particular gets silently
-# read as a literal space by the HTTP server, corrupting the sid and
-# causing a 401 on the top_domains call even though the preceding
-# /api/auth login succeeded. Pi-hole's own docs call this out explicitly:
-# "your SID needs to be URL-encoded" when passed in the request URI.
-#
-# UPDATED (v1, carried over): collect.py authenticates against each
-# Pi-hole's v6 session API (POST password -> /api/auth -> sid) before
-# calling top_domains, using the shared admin password from
-# pihole-api-credentials (see 15-external-secret-pihole.yaml). Each run
-# re-authenticates fresh per branch rather than caching/reusing a sid
-# across the 15-minute schedule — simpler, and avoids session-expiry
-# handling for a job that only runs every 15 minutes anyway.
-#
-# BUILD-QUALITY NOTE (unchanged): rollup.py installs psycopg2-binary via
-# pip at container start rather than baking a real image — acceptable for
-# a POC job that runs once a day, but worth building a small dedicated
-# image (or picking an existing one with it preinstalled) if this becomes
-# a permanent fixture, to stop depending on PyPI being reachable every run.
+# All the collect.py/rollup.py fixes from earlier iterations (v1-v6) are
+# unchanged and still in effect below — this update only touches how the
+# credentials reach the container, not the application logic.
 
 apiVersion: v1
 kind: ConfigMap
@@ -84,8 +25,7 @@ metadata:
   name: pihole-branch-hosts
   namespace: dns-monitoring
 data:
-  # PLACEHOLDER, same as values.yaml's additionalScrapeConfigs — your real
-  # 25 branch IPs/hostnames, keyed by branch name. Add entries as needed.
+  # PLACEHOLDER — your real 25 branch IPs/hostnames, keyed by branch name.
   branches.json: |
     {
       "test": "192.168.3.12"
@@ -122,8 +62,8 @@ data:
 
     def fetch_top_domains(host, sid):
         # sid is base64 and can contain +, /, = — must be percent-encoded
-        # or it gets corrupted in transit (e.g. '+' silently becomes a
-        # space), which causes a 401 on this call even with a valid sid.
+        # or it gets corrupted in transit, causing a 401 on this call
+        # even with a valid sid.
         safe_sid = urllib.parse.quote(sid, safe="")
         url = f"http://{host}/api/stats/top_domains?count=100&sid={safe_sid}"
         with urllib.request.urlopen(url, timeout=10) as resp:
@@ -131,8 +71,7 @@ data:
 
     def push_to_loki(branch, payload):
         # Pi-hole v6's top_domains response nests the list under
-        # "domains", NOT "top_domains" — confirmed against a live branch:
-        # {"domains": [{"domain": ..., "count": ...}, ...], "total_queries": ...}
+        # "domains", NOT "top_domains".
         entries = payload.get("domains", [])
         if not entries:
             return
@@ -166,15 +105,31 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: pihole-domain-collector
+          annotations:
+            vault.hashicorp.com/agent-inject: "true"
+            vault.hashicorp.com/role: "dns-monitoring-eso"
+            vault.hashicorp.com/agent-pre-populate-only: "true"
+            vault.hashicorp.com/agent-inject-secret-pihole-api: "dns-monitoring/data/pihole-api"
+            vault.hashicorp.com/agent-inject-template-pihole-api: |
+              {{- with secret "dns-monitoring/data/pihole-api" -}}
+              export PIHOLE_API_PASSWORD="{{ .Data.data.PIHOLE_API_PASSWORD }}"
+              {{- end }}
+            vault.hashicorp.com/agent-limits-cpu: "100m"
+            vault.hashicorp.com/agent-limits-mem: "64Mi"
+            vault.hashicorp.com/agent-requests-cpu: "50m"
+            vault.hashicorp.com/agent-requests-mem: "32Mi"
         spec:
+          serviceAccountName: dns-monitoring-eso
           restartPolicy: OnFailure
           containers:
             - name: collector
               image: python:3.12-slim
-              command: ["python", "/scripts/collect.py"]
-              envFrom:
-                - secretRef:
-                    name: pihole-api-credentials
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  . /vault/secrets/pihole-api
+                  exec python /scripts/collect.py
               volumeMounts:
                 - name: script
                   mountPath: /scripts
@@ -255,8 +210,6 @@ metadata:
   name: dns-analytics-rollup
   namespace: dns-monitoring
 spec:
-  # Runs shortly after midnight, giving the day's last collector runs time
-  # to land in Loki before the aggregation query's 24h window closes.
   schedule: "20 0 * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
@@ -265,15 +218,34 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: dns-analytics-rollup
+          annotations:
+            vault.hashicorp.com/agent-inject: "true"
+            vault.hashicorp.com/role: "dns-monitoring-eso"
+            vault.hashicorp.com/agent-pre-populate-only: "true"
+            vault.hashicorp.com/agent-inject-secret-postgres-rollup: "dns-monitoring/data/postgres-rollup"
+            vault.hashicorp.com/agent-inject-template-postgres-rollup: |
+              {{- with secret "dns-monitoring/data/postgres-rollup" -}}
+              export POSTGRES_USER="{{ .Data.data.POSTGRES_USER }}"
+              export POSTGRES_PASSWORD="{{ .Data.data.POSTGRES_PASSWORD }}"
+              export POSTGRES_DB="{{ .Data.data.POSTGRES_DB }}"
+              {{- end }}
+            vault.hashicorp.com/agent-limits-cpu: "100m"
+            vault.hashicorp.com/agent-limits-mem: "64Mi"
+            vault.hashicorp.com/agent-requests-cpu: "50m"
+            vault.hashicorp.com/agent-requests-mem: "32Mi"
         spec:
+          serviceAccountName: dns-monitoring-eso
           restartPolicy: OnFailure
           containers:
             - name: rollup
               image: python:3.12-slim
-              command: ["sh", "-c", "pip install --quiet psycopg2-binary && python /scripts/rollup.py"]
-              envFrom:
-                - secretRef:
-                    name: postgres-rollup-credentials
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  . /vault/secrets/postgres-rollup
+                  pip install --quiet psycopg2-binary
+                  exec python /scripts/rollup.py
               volumeMounts:
                 - name: script
                   mountPath: /scripts

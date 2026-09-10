@@ -1,13 +1,21 @@
-# Metabase — the free, no-training-needed BI tool marketing opens
-# directly, per the "no Power BI budget" discussion.
+# Metabase — the free, no-training-needed BI tool.
 #
-# POC MODE simplification: this points Metabase's own application
-# database AND the data source it visualizes at the SAME postgres-rollup
-# instance. Fine at this scale (one small rollup table, one internal
-# analyst-facing tool); if Metabase's own metadata growth or query load
-# ever meaningfully contends with the rollup writes, split into two
-# separate Postgres instances (metabase-app-db + postgres-rollup) — same
-# StatefulSet/Secret pattern, just one more of each.
+# UPDATED for Vault Agent Injector (replaces External Secrets Operator).
+# Same pattern as postgres-rollup: serviceAccountName, pre-populate-only
+# (Metabase's DB credentials are a static KV v2 value, no lease to renew),
+# and the injected file sourced before the real process starts.
+#
+# ⚠️ UNCONFIRMED — VERIFY BEFORE APPLYING: this wraps the container's
+# entrypoint to source the Vault file first, which requires knowing the
+# image's actual ENTRYPOINT/CMD. The command below assumes
+# metabase/metabase's official entrypoint script lives at
+# /app/run_metabase.sh, which has historically been correct for this
+# image family but was NOT independently confirmed against the specific
+# v0.51.4 tag pinned here. Confirm before applying:
+#   docker pull metabase/metabase:v0.51.4
+#   docker inspect metabase/metabase:v0.51.4 --format='{{.Config.Entrypoint}} {{.Config.Cmd}}'
+# If the real entrypoint differs, update the `args:` below to exec the
+# correct path instead.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,12 +30,34 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: metabase
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "dns-monitoring-eso"
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/agent-inject-secret-postgres-rollup: "dns-monitoring/data/postgres-rollup"
+        vault.hashicorp.com/agent-inject-template-postgres-rollup: |
+          {{- with secret "dns-monitoring/data/postgres-rollup" -}}
+          export MB_DB_USER="{{ .Data.data.POSTGRES_USER }}"
+          export MB_DB_PASS="{{ .Data.data.POSTGRES_PASSWORD }}"
+          export MB_DB_DBNAME="{{ .Data.data.POSTGRES_DB }}"
+          {{- end }}
+        vault.hashicorp.com/agent-limits-cpu: "100m"
+        vault.hashicorp.com/agent-limits-mem: "64Mi"
+        vault.hashicorp.com/agent-requests-cpu: "50m"
+        vault.hashicorp.com/agent-requests-mem: "32Mi"
     spec:
+      serviceAccountName: dns-monitoring-eso
       containers:
         - name: metabase
           image: metabase/metabase:v0.51.4   # pin to a real current version before applying
           ports:
             - containerPort: 3000
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              . /vault/secrets/postgres-rollup
+              exec /app/run_metabase.sh
           env:
             - name: MB_DB_TYPE
               value: postgres
@@ -35,21 +65,9 @@ spec:
               value: postgres-rollup.dns-monitoring.svc.cluster.local
             - name: MB_DB_PORT
               value: "5432"
-            - name: MB_DB_DBNAME
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-rollup-credentials
-                  key: POSTGRES_DB
-            - name: MB_DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-rollup-credentials
-                  key: POSTGRES_USER
-            - name: MB_DB_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-rollup-credentials
-                  key: POSTGRES_PASSWORD
+            # MB_DB_DBNAME / MB_DB_USER / MB_DB_PASS now come from the
+            # sourced Vault file above, not secretKeyRef — no k8s Secret
+            # exists to reference anymore.
           resources:
             requests:
               cpu: 200m
@@ -64,17 +82,6 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
             failureThreshold: 3
-          # Without this, a wedged-but-alive pod (e.g. Jetty thread pool
-          # exhaustion after a canceled/failed query — see the
-          # java.lang.AssertionError: "QP unexpectedly returned nil"
-          # incident) only ever gets marked not-ready. With a single
-          # replica, that means the Ingress has nowhere else to route to
-          # and every request 504s indefinitely until someone notices and
-          # manually restarts the pod. livenessProbe gives Kubernetes
-          # permission to kill and replace it automatically. Deliberately
-          # more lenient than readinessProbe (longer delay, higher
-          # failureThreshold) so a slow-but-recovering pod isn't killed
-          # for the same blip that just makes it temporarily not-ready.
           livenessProbe:
             httpGet:
               path: /api/health
@@ -98,16 +105,6 @@ spec:
       targetPort: 3000
   type: ClusterIP
 ---
-# Same ingress conventions as Grafana in values.yaml: internal-ca-issuer,
-# nginx ingressClassName, TLS via cert-manager.
-#
-# metabase-admin-credentials (from Vault, see 08-dns-analytics-kv-and-
-# secrets.sh) is NOT wired into this Deployment as an env var — Metabase
-# has no supported "create this admin account on first boot" mechanism
-# via env vars. The first time this URL is opened, a human still has to
-# walk through Metabase's setup wizard and manually create the admin
-# account using the email/password stored at dns-monitoring/metabase-admin,
-# so the credential exists in Vault rather than only in someone's head.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

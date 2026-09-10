@@ -1,9 +1,35 @@
-# Postgres for the daily "top sites" rollup table — NOT a revival of the
-# old Grafana-HA postgres.yaml pattern that was removed. That one existed
-# only so two Grafana pods could share state; this one exists because
-# Loki is the wrong shape of store for "here's a ranked list with names
-# in it, updated daily" (see the analytics design discussion). Single pod
-# + PVC, same durability-without-redundancy philosophy as values.yaml.
+# Postgres for the daily "top sites" rollup table.
+#
+# UPDATED for Vault Agent Injector (replaces External Secrets Operator).
+# No more `envFrom: secretRef: postgres-rollup-credentials` — there is no
+# k8s Secret at all anymore. Instead:
+#   - `serviceAccountName: dns-monitoring-eso` — REQUIRED. Under the
+#     injector, THIS POD authenticates to Vault directly using its own
+#     ServiceAccount token, matched against the dns-monitoring-eso role's
+#     bound_service_account_names. Without this, the pod runs as
+#     `default` and the injector's Vault login fails at startup.
+#   - `agent-inject-template-postgres-rollup` renders the secret as a
+#     shell-sourceable file at /vault/secrets/postgres-rollup (the
+#     injector's default mount path, shared into every container in the
+#     pod via an emptyDir).
+#   - `agent-pre-populate-only: "true"` — this is a static KV v2 secret
+#     with no lease to renew, so we don't want the injector's default
+#     persistent renewal sidecar (unnecessary overhead for a value that
+#     never rotates on its own). This makes the injector use a one-shot
+#     init container instead: writes the file once, then exits, and the
+#     main container starts normally afterward.
+#   - The official postgres image's own entrypoint
+#     (docker-entrypoint.sh) expects POSTGRES_USER/PASSWORD/DB as real
+#     process environment variables — it can't read Vault's file
+#     directly. `command`/`args` below wrap it: source the injected file
+#     (which sets those exact three vars via `export`), then exec the
+#     image's real entrypoint.
+#   - agent-limits/requests annotations keep the injector's init
+#     container from silently inflating this pod's effective quota
+#     charge past what's actually needed — same class of issue as the
+#     Grafana k8s-sidecar default-resource problem noted in
+#     values.yaml's original comments, just here it's Vault's sidecar
+#     instead of Grafana's.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -49,18 +75,34 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: postgres-rollup
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "dns-monitoring-eso"
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/agent-inject-secret-postgres-rollup: "dns-monitoring/data/postgres-rollup"
+        vault.hashicorp.com/agent-inject-template-postgres-rollup: |
+          {{- with secret "dns-monitoring/data/postgres-rollup" -}}
+          export POSTGRES_USER="{{ .Data.data.POSTGRES_USER }}"
+          export POSTGRES_PASSWORD="{{ .Data.data.POSTGRES_PASSWORD }}"
+          export POSTGRES_DB="{{ .Data.data.POSTGRES_DB }}"
+          {{- end }}
+        vault.hashicorp.com/agent-limits-cpu: "100m"
+        vault.hashicorp.com/agent-limits-mem: "64Mi"
+        vault.hashicorp.com/agent-requests-cpu: "50m"
+        vault.hashicorp.com/agent-requests-mem: "32Mi"
     spec:
+      serviceAccountName: dns-monitoring-eso
       containers:
         - name: postgres
           image: postgres:16-alpine
           ports:
             - containerPort: 5432
-          # Env names (POSTGRES_USER/PASSWORD/DB) match the official
-          # postgres image's expected variables exactly — no translation
-          # layer needed between the Vault secret and this container.
-          envFrom:
-            - secretRef:
-                name: postgres-rollup-credentials
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              . /vault/secrets/postgres-rollup
+              exec docker-entrypoint.sh postgres
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

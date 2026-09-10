@@ -1,15 +1,28 @@
-# Additional NetworkPolicies for the marketing-analytics addition.
+# Additional NetworkPolicies for the analytics pipeline.
 #
-# Most pod-to-pod traffic these new components need (collector -> Loki,
-# rollup job -> Loki, rollup job -> postgres-rollup, Metabase ->
-# postgres-rollup) is already covered by 02-networkpolicy.yaml's existing
-# allow-intra-namespace rule (any pod in dns-monitoring can reach any
-# other pod in dns-monitoring on ingress) and by the fact that egress is
-# open by default for any pod not specifically selected by a restrictive
-# Egress NetworkPolicy — which none of postgres-rollup, loki, or metabase
-# are. Only two genuinely new rules are needed:
+# UPDATED for Vault Agent Injector: allow-egress-domain-collector is
+# exhaustive by design (attaching policyTypes: [Egress] at all makes it
+# so for every pod it selects) — it previously only permitted 53/80/443
+# and in-namespace 3100. The injector's init container now needs to
+# reach Vault itself at vault.vault.svc:8200 to authenticate and fetch
+# dns-monitoring/data/pihole-api, which is a DIFFERENT namespace and
+# port than anything already permitted — without this rule, the
+# collector's Vault login fails outright before collect.py ever runs.
+#
+# postgres-rollup, loki, and metabase are unaffected — none of them has
+# an Egress-type NetworkPolicy selecting them, so their egress (including
+# their own injector init containers reaching Vault) remains unrestricted
+# by default, same as before this change.
+#
+# ⚠️ VERIFY BEFORE APPLYING: the namespaceSelector below assumes Vault
+# runs in a namespace literally labeled `kubernetes.io/metadata.name:
+# vault` (Kubernetes sets this automatically from the namespace's own
+# name on 1.21+, so this should just work if Vault's namespace is named
+# "vault" — but confirm rather than assume, same caution as the
+# ingress-nginx selector elsewhere in this file):
+#   kubectl get ns vault --show-labels
 
-# Metabase reachable from the same ingress-nginx controller as Grafana.
+# Metabase reachable from the ingress-nginx controller.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -31,14 +44,7 @@ spec:
           port: 3000
 ---
 # Domain-collector CronJob pods: DNS resolution, reaching each Pi-hole's
-# API, and pushing into Loki. This is the one new component that DOES
-# need an explicit egress rule — attaching policyTypes: [Egress] at all
-# makes this policy exhaustive for the pods it selects, so the
-# in-namespace Loki leg has to be listed here too, not left to
-# allow-intra-namespace (that rule only governs ingress, not egress).
-# Branch access is opened up rather than CIDR-restricted for now, same
-# reasoning as allow-egress-dns-and-branches in 02-networkpolicy.yaml —
-# tighten once all branches sit on known addressing.
+# API, pushing into Loki, AND (new) reaching Vault for the injector.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -69,3 +75,12 @@ spec:
       ports:
         - protocol: TCP
           port: 3100
+    # NEW: Vault, for the injector's init container to authenticate and
+    # fetch dns-monitoring/data/pihole-api before collect.py runs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+      ports:
+        - protocol: TCP
+          port: 8200
