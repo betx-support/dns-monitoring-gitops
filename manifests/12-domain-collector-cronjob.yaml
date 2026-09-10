@@ -1,23 +1,37 @@
 # Two CronJobs implementing the collection -> rollup pipeline.
 #
-# UPDATED for Vault Agent Injector (replaces External Secrets Operator).
-# Both CronJobs' pod templates now need:
-#   - `serviceAccountName: dns-monitoring-eso` (see 11-postgres-rollup.yaml's
-#     comment for why this is required, not optional).
-#   - `agent-pre-populate-only: "true"` — CRITICAL for CronJobs
-#     specifically. Without this, the injector adds a persistent
-#     renewal sidecar that never exits. A Job pod can't reach Completed
-#     while ANY container is still running — collect.py/rollup.py
-#     finishing wouldn't matter, the Job would hang forever. Worse, both
-#     CronJobs use `concurrencyPolicy: Forbid`, so a hung Job blocks
-#     every subsequent scheduled run too — the 15-minute collector would
-#     silently stop firing entirely after its very first run.
-#   - Commands changed from array form (`["python", "/scripts/collect.py"]`)
-#     to shell form so the injected secret file can be sourced first.
+# UPDATED: both CronJobs now set `ttlSecondsAfterFinished: 300` on their
+# jobTemplate.spec. Without this, completed Job pods stick around
+# indefinitely (Kubernetes only auto-cleans them via
+# successfulJobsHistoryLimit/failedJobsHistoryLimit at the CronJob level,
+# which caps how many *Jobs* are kept, not how quickly). Each finished
+# pod's resource *limits* still count against the namespace
+# ResourceQuota until the pod is actually deleted — this is exactly what
+# caused `dns-analytics-rollup-manual` to fail outright with
+# "exceeded quota: dns-monitoring-quota, requested: limits.cpu=300m,
+# used: limits.cpu=1800m, limited: limits.cpu=2": three completed
+# pihole-domain-collector pods (100m limit each) plus the three
+# long-running pods (loki 500m + metabase 500m + postgres-rollup 300m)
+# had already eaten the full 2000m ceiling, with no room left for the
+# rollup's 300m. `ttlSecondsAfterFinished: 300` has the Kubernetes TTL
+# controller delete each pod 5 minutes after it finishes (success or
+# failure), so quota is reliably freed shortly after each run instead of
+# accumulating run after run.
+#
+# UPDATED: pihole-domain-collector's schedule changed from every 15
+# minutes ("*/15 * * * *") to every 30 minutes ("*/30 * * * *"), per
+# request. Combined with the dashboard's own 35-minute auto-refresh
+# (set in Metabase's UI, not here — see the note at the bottom of this
+# file), this keeps each dashboard refresh reliably picking up at least
+# one, usually close to two, completed collection runs since the
+# previous refresh — 35 > 30 leaves a comfortable margin so a refresh
+# essentially never lands in the middle of a collector run and reads
+# stale data.
 #
 # All the collect.py/rollup.py fixes from earlier iterations (v1-v6) are
-# unchanged and still in effect below — this update only touches how the
-# credentials reach the container, not the application logic.
+# unchanged and still in effect below — this update only touches Job
+# lifecycle/scheduling, not the application logic or the Vault Agent
+# Injector wiring.
 
 apiVersion: v1
 kind: ConfigMap
@@ -97,10 +111,11 @@ metadata:
   name: pihole-domain-collector
   namespace: dns-monitoring
 spec:
-  schedule: "*/15 * * * *"
+  schedule: "*/30 * * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: 300
       template:
         metadata:
           labels:
@@ -214,6 +229,7 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: 300
       template:
         metadata:
           labels:
@@ -260,3 +276,20 @@ spec:
             - name: script
               configMap:
                 name: dns-analytics-rollup-script
+
+# ---------------------------------------------------------------------
+# Dashboard auto-refresh (35 minutes) — set in Metabase's UI, not here.
+# There is no manifest/config-file equivalent; Metabase stores this in
+# its own application database as a per-dashboard setting.
+#   1. Open the dashboard in Metabase.
+#   2. Click the "..." (or clock) icon in the top-right of the dashboard.
+#   3. Choose "Auto-refresh" and set it to 35 minutes (or the closest
+#      preset — Metabase's default options are 1/5/10/15/30/60 min; if
+#      exactly 35 isn't offered in your version, pick 30 rather than 60,
+#      since 30 still comfortably exceeds the collector's own 30-minute
+#      cadence without introducing a long stale window).
+#   4. This setting lives in Metabase's own DB (the same postgres-rollup
+#      instance, per 13-metabase.yaml) and will need to be re-applied if
+#      Metabase is ever reinstalled from scratch (e.g. after a future
+#      cluster rebuild), same as any other dashboard/question you build.
+# ---------------------------------------------------------------------
