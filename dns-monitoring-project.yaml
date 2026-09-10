@@ -1,9 +1,23 @@
-# UPDATED — adds https://grafana.github.io/helm-charts as a permitted
-# source repo, for the new dns-monitoring-loki Helm Application
-# (argocd-application-loki.yaml). Everything else is unchanged from the
-# original dns-monitoring-project.yaml; see that file's original comments
-# for why clusterResourceWhitelist isn't empty here and why kube-system
-# is a permitted destination.
+# UPDATED: Pipeline A (kube-prometheus-stack) removed. This trims the
+# permissions that existed only for it:
+#   - prometheus-community's Helm repo is no longer a needed source.
+#   - The CRD/ClusterRole/ClusterRoleBinding cluster-resource whitelist
+#     entries existed only for kube-prometheus-stack's Operator
+#     (Prometheus/Alertmanager CRDs + its RBAC). Loki's chart
+#     (deploymentMode: SingleBinary, filesystem storage) does not
+#     register cluster-scoped resources of its own, so an empty
+#     whitelist should be safe — but do a dry-run sync after applying
+#     this before trusting it in case that assumption doesn't hold for
+#     your specific chart version:
+#       argocd app diff dns-monitoring-loki
+#     If it complains about a missing permitted kind, add just that kind
+#     back rather than restoring the full original list.
+#   - kube-system was only a valid destination because kube-prometheus-
+#     stack's kubelet service monitor targeted it (values.yaml's
+#     `kubelet.namespace: dns-monitoring` override actually pointed this
+#     back at dns-monitoring, so kube-system as a destination was likely
+#     already unused — removing it here; add it back if anything else in
+#     this project turns out to need it).
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -12,22 +26,12 @@ metadata:
 spec:
   sourceRepos:
     - https://github.com/betx-support/dns-monitoring-gitops.git
-    # kube-prometheus-stack's Helm chart source.
-    - https://prometheus-community.github.io/helm-charts
-    # Loki's Helm chart source, added for the marketing-analytics addition.
+    # Loki's Helm chart source — the only remaining external chart source.
     - https://grafana.github.io/helm-charts
   destinations:
     - namespace: dns-monitoring
       server: https://kubernetes.default.svc
-    - namespace: kube-system
-      server: https://kubernetes.default.svc
-  clusterResourceWhitelist:
-    - group: "apiextensions.k8s.io"
-      kind: "CustomResourceDefinition"
-    - group: "rbac.authorization.k8s.io"
-      kind: "ClusterRole"
-    - group: "rbac.authorization.k8s.io"
-      kind: "ClusterRoleBinding"
+  clusterResourceWhitelist: []
   namespaceResourceWhitelist:
     - group: "*"
       kind: "*"

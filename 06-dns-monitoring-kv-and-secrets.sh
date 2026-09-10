@@ -1,28 +1,22 @@
 #!/usr/bin/env bash
-# §6.5-equivalent for dns-monitoring — mirrors 03-enable-kv-and-write-secrets.sh.
-# Enable a KV v2 engine at path "dns-monitoring" (its own mount, not shared
-# with snipeit's "snipeit" mount) and write the actual secret values.
-# Replace every <generated> placeholder before running.
-# Run once, by hand, using the root token from vault-init-output.txt (or a
-# suitably scoped admin token — the root token should ideally be revoked
-# after initial setup per Vault's own hardening guidance, in which case use
-# whatever admin auth path you've since set up instead).
+# UPDATED: Pipeline A (grafana-admin, alertmanager) removed — those
+# secrets no longer have any consumer. This script is kept (rather than
+# deleted outright) only because 08-dns-analytics-kv-and-secrets.sh's
+# header comment describes itself as "part 2" of this one and references
+# it by name — deleting this file entirely would orphan that reference.
+# If you've already run the original version of this script, the live
+# Vault entries at dns-monitoring/grafana-admin and dns-monitoring/
+# alertmanager still exist and are NOT removed by re-running this —
+# `vault kv put` only writes/updates, it doesn't delete other paths.
+# Remove them explicitly, once, by hand:
+#   kubectl exec -n vault vault-0 -- vault kv delete dns-monitoring/grafana-admin
+#   kubectl exec -n vault vault-0 -- vault kv delete dns-monitoring/alertmanager
+#
+# Nothing left for this script to actually do for a fresh setup — kept
+# as a placeholder/pointer only. Safe to delete once 08's header comment
+# is updated to stop referencing it.
 set -euo pipefail
 
-ROOT_TOKEN="<root-token>"   # from vault-init-output.txt — never hard-code for real use
-
-kubectl exec -n vault vault-0 -- vault login "vault_token"
-
-kubectl exec -n vault vault-0 -- vault secrets enable -path=dns-monitoring kv-v2
-
-# POC MODE: no "dns-monitoring/postgres" secret anymore — Postgres was
-# removed since Grafana is back to a single pod persisting via its own
-# PVC (see values.yaml). If you re-enable the HA Postgres pattern later,
-# re-add: vault kv put dns-monitoring/postgres POSTGRES_PASSWORD="<generated>"
-
-kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/grafana-admin \
-  GRAFANA_ADMIN_USER="admin" \
-  GRAFANA_ADMIN_PASSWORD=$(openssl rand -base64 24)
-
-kubectl exec -n vault vault-0 -- vault kv put dns-monitoring/alertmanager \
-  ALERTMANAGER_SLACK_WEBHOOK_URL="<your-real-slack-webhook-url>"
+echo "Pipeline A removed — this script no longer writes any secrets."
+echo "See this file's header comment for the one-time manual cleanup"
+echo "commands for the old grafana-admin/alertmanager Vault entries."

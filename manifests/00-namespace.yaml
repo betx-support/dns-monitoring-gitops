@@ -1,10 +1,23 @@
-# UPDATED for the marketing-analytics addition. Same ResourceQuota/
-# LimitRange objects as the original 00-namespace.yaml — only the numbers
-# changed, to account for three new long-running pods (postgres-rollup,
-# loki, metabase) plus their PVCs, on top of the existing three
-# (prometheus, alertmanager, grafana). CronJob job-pods are transient and
-# generally don't hold the "pods" count for long, but a small buffer is
-# included in case a collector/rollup run overlaps with normal traffic.
+# UPDATED: Pipeline A (prometheus, alertmanager, grafana + their PVCs)
+# removed. Quota shrunk to match the real remaining footprint: three
+# long-running pods (postgres-rollup, loki, metabase) plus the two
+# CronJobs' transient pods. Math below is requests/limits summed from
+# each component's own manifest, with a buffer added for the rare case
+# where the two CronJobs' 15-min/daily schedules overlap with each other
+# or with a manual test run:
+#
+#   requests.cpu:    postgres-rollup 100m + loki 200m + metabase 200m
+#                     = 500m, + ~180m buffer  -> 800m
+#   requests.memory: postgres-rollup 256Mi + loki 512Mi + metabase 512Mi
+#                     = 1280Mi, + buffer      -> 1.75Gi
+#   limits.cpu:      postgres-rollup 300m + loki 500m + metabase 500m
+#                     = 1300m, + CronJob peak -> 2000m
+#   limits.memory:   postgres-rollup 512Mi + loki 1Gi + metabase 1536Mi
+#                     = 3072Mi, + CronJob peak -> 4Gi
+#   requests.storage: postgres-rollup 5Gi + loki 20Gi = 25Gi, + buffer -> 30Gi
+#   persistentvolumeclaims: postgres-rollup(1) + loki(1) = 2, + buffer -> 3
+#   pods: 3 long-running + room for both CronJobs' pods overlapping,
+#         a manual test Job, and one ad-hoc debug pod -> 6
 #
 # Namespace itself still intentionally not defined here — see the
 # original file's comment on why (CreateNamespace=true handles it).
@@ -15,18 +28,18 @@ metadata:
   namespace: dns-monitoring
 spec:
   hard:
-    requests.cpu: "1800m"
-    requests.memory: "3.5Gi"
-    limits.cpu: "4000m"
-    limits.memory: "6Gi"
-    requests.storage: "60Gi"
-    persistentvolumeclaims: "6"
-    pods: "10"
+    requests.cpu: "800m"
+    requests.memory: "1.75Gi"
+    limits.cpu: "2000m"
+    limits.memory: "4Gi"
+    requests.storage: "30Gi"
+    persistentvolumeclaims: "3"
+    pods: "6"
 ---
 # Fallback requests/limits for any container in this namespace that
-# doesn't specify its own — unchanged from the original file; every new
-# component (postgres-rollup, loki, metabase, the two CronJobs) sets
-# explicit resources already, so this remains a pure safety net.
+# doesn't specify its own — unchanged; every remaining component
+# (postgres-rollup, loki, metabase, the two CronJobs) sets explicit
+# resources already, so this stays a pure safety net.
 apiVersion: v1
 kind: LimitRange
 metadata:
