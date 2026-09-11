@@ -28,6 +28,18 @@
 # essentially never lands in the middle of a collector run and reads
 # stale data.
 #
+# UPDATED: dns-analytics-rollup's schedule changed from once nightly
+# ("20 0 * * *") to roughly every 40 minutes ("*/40 * * * *"), per
+# request. Standard cron cannot express a perfectly even 40-minute
+# cadence (60 is not a multiple of 40) — */40 fires at :00 and :40 past
+# every hour, so the gap between runs alternates 40min/20min rather than
+# staying constant at exactly 40 minutes. This is a cron limitation, not
+# a manifest bug; true even spacing would require two offset CronJob
+# schedules or an external scheduler. Safe to run this often: rollup.py
+# recomputes the trailing-24h aggregate fresh every run and UPSERTs
+# (ON CONFLICT DO UPDATE), so more frequent runs only mean fresher
+# numbers, never double-counting or drift.
+#
 # All the collect.py/rollup.py fixes from earlier iterations (v1-v6) are
 # unchanged and still in effect below — this update only touches Job
 # lifecycle/scheduling, not the application logic or the Vault Agent
@@ -225,7 +237,7 @@ metadata:
   name: dns-analytics-rollup
   namespace: dns-monitoring
 spec:
-  schedule: "20 0 * * *"
+  schedule: "*/40 * * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
